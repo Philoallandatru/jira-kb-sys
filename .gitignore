@@ -1,0 +1,17 @@
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.env
+
+data/jira_summary.db
+data/raw_docs/*
+!data/raw_docs/.gitkeep
+data/markdown/*
+!data/markdown/.gitkeep
+data/chunks/*
+!data/chunks/.gitkeep
+
+output/daily/*
+!output/daily/.gitkeep

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jira Daily Report</title>
+  <style>
+    body { font-family: sans-serif; margin: 24px; color: #222; }
+    h1, h2 { color: #1f4f7a; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; }
+    th { background: #eef5fb; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Jira Daily Report - {{ report.report_date }}</h1>
+  <p>Generated at {{ report.generated_at }} | Source run: {{ report.run_id or "n/a" }}</p>
+  <h2>Overview</h2>
+  <table>
+    <tr><th>Total Issues</th><td>{{ report.metrics.total_issues }}</td></tr>
+    <tr><th>New Issues</th><td>{{ report.metrics.new_issues }}</td></tr>
+    <tr><th>Closed Issues</th><td>{{ report.metrics.closed_issues }}</td></tr>
+    <tr><th>Blocked Issues</th><td>{{ report.metrics.blocked_issues }}</td></tr>
+    <tr><th>Stale Issues</th><td>{{ report.metrics.stale_issues }}</td></tr>
+  </table>
+  <h2>Project Summary</h2>
+  <table>
+    <thead><tr><th>Project</th><th>Total</th><th>Open</th><th>Closed</th><th>Blocked</th></tr></thead>
+    <tbody>
+    {% for row in report.project_summaries %}
+      <tr>
+        <td>{{ row.project }}</td>
+        <td>{{ row.total }}</td>
+        <td>{{ row.open_count }}</td>
+        <td>{{ row.closed_count }}</td>
+        <td>{{ row.blocked_count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <h2>Priority Issues</h2>
+  <table>
+    <thead><tr><th>Key</th><th>Summary</th><th>Status</th><th>Owner</th><th>Priority</th><th>Change</th></tr></thead>
+    <tbody>
+    {% for issue in report.priority_issues %}
+      <tr>
+        <td>{{ issue.issue_key }}</td>
+        <td>{{ issue.summary }}</td>
+        <td>{{ issue.status }}</td>
+        <td>{{ issue.assignee or "-" }}</td>
+        <td>{{ issue.priority or "-" }}</td>
+        <td>{{ issue.change_summary }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if daily_analysis %}
+  <h2>AI Daily Analysis</h2>
+  <table>
+    <tr><th>Overall Health</th><td>{{ daily_analysis.overall_health }}</td></tr>
+    <tr><th>Top Risks</th><td>{% for item in daily_analysis.top_risks %}<div>{{ item }}</div>{% endfor %}</td></tr>
+    <tr><th>Suspected Root Causes</th><td>{% for item in daily_analysis.suspected_root_causes %}<div>{{ item }}</div>{% endfor %}</td></tr>
+    <tr><th>Recommended Actions</th><td>{% for item in daily_analysis.recommended_actions %}<div>{{ item }}</div>{% endfor %}</td></tr>
+    <tr><th>Watch Items</th><td>{% for item in daily_analysis.watch_items %}<div>{{ item }}</div>{% endfor %}</td></tr>
+  </table>
+  {% endif %}
+</body>
+</html>

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jira-summary"
+version = "0.1.0"
+description = "Markdown-first Jira daily reporting and AI analysis system"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "jinja2>=3.1.0",
+  "markitdown>=0.1.1",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "pyyaml>=6.0.0",
+  "requests>=2.32.0",
+  "streamlit>=1.37.0",
+  "weasyprint>=62.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2.0"]
+playwright = ["playwright>=1.46.0"]
+pdf_fallback = ["marker-pdf>=1.4.3"]
+
+[project.scripts]
+jira-summary = "app.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

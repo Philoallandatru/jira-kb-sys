@@ -1,0 +1,45 @@
+jira:
+  base_url: "https://jira.example.com"
+  login_url: "https://jira.example.com/login"
+  username: ""
+  password: ""
+  project_filters:
+    - name: "default"
+      url: "https://jira.example.com/issues/?jql=project%20%3D%20SSD"
+  auth_state_path: "./data/jira_auth.json"
+  list_selector: "table tbody tr"
+  detail_link_selector: "a[data-testid='issue.views.issue-base.foundation.breadcrumbs.current-issue.item']"
+  username_selector: "input[name='username']"
+  password_selector: "input[name='password']"
+  submit_selector: "button[type='submit']"
+  issue_key_selector: "td[data-column-id='key'] a"
+  title_selector: "td[data-column-id='summary']"
+  status_selector: "td[data-column-id='status']"
+  assignee_selector: "td[data-column-id='assignee']"
+  priority_selector: "td[data-column-id='priority']"
+  updated_selector: "td[data-column-id='updated']"
+  timeout_seconds: 45
+
+docs:
+  raw_dir: "./data/raw_docs"
+  markdown_dir: "./data/markdown"
+  chunks_dir: "./data/chunks"
+  max_chunk_chars: 1800
+  overlap_chars: 200
+  marker_min_chars: 300
+  supported_extensions: [".pdf", ".pptx", ".xlsx", ".xls", ".docx"]
+
+storage:
+  database_path: "./data/jira_summary.db"
+  output_dir: "./output"
+
+llm:
+  base_url: "http://localhost:8000/v1"
+  api_key: "dummy"
+  model: "qwen3.5-35b"
+  timeout_seconds: 120
+
+reporting:
+  stale_days: 7
+  risk_keywords: ["blocker", "reopen", "panic", "timeout", "data loss", "critical", "stuck"]
+  top_issue_limit: 20
