@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 from app.config import load_config
 from app.docs import BM25Index, DocumentConverter
-from app.qa import answer_question
+from app.qa import answer_jira_docs_question, answer_question
 from app.repository import Repository
 
 st.set_page_config(page_title="Jira Summary", layout="wide")
@@ -33,7 +33,7 @@ def rebuild_kb() -> int:
 
 st.title("Jira Daily Summary")
 dates = repo.list_snapshot_dates()
-view = st.sidebar.radio("View", ["Dashboard", "Daily Reports", "Issue Explorer", "Knowledge Hits", "Ask Docs", "Manage Knowledge"])
+view = st.sidebar.radio("View", ["Dashboard", "Daily Reports", "Issue Explorer", "Knowledge Hits", "Ask Docs", "Ask Jira + Docs", "Manage Knowledge"])
 if view != "Manage Knowledge" and not dates:
     st.warning("No snapshot data available.")
     st.stop()
@@ -100,6 +100,34 @@ elif view == "Ask Docs":
         st.write(r.answer)
         st.caption(f"Mode: {r.mode}")
         for i, c in enumerate(r.citations, start=1):
+            st.markdown(f"**{i}. {' / '.join(c.get('section_path', [])) or 'Unknown section'}**")
+            st.code(c.get("quote", ""), language="text")
+            st.caption(c.get("source_path", ""))
+elif view == "Ask Jira + Docs":
+    st.header("Ask Jira + Docs")
+    st.caption("Ask a combined question over the selected day's Jira snapshot and the local knowledge base.")
+    q = st.text_area("Question", value="Which Jira item is most relevant to NVMe admin queue timeout recovery, and what local spec/design evidence supports it?", height=110)
+    top_k = st.slider("Retrieved document chunks", 1, 10, 5, key="combined_top_k")
+    issues = repo.load_snapshot(date_value)
+    issue_analyses = repo.load_issue_analyses(date_value)
+    daily_analysis = repo.load_daily_analysis(date_value)
+    chunks = repo.load_doc_chunks()
+    if not chunks:
+        st.info("No document chunks found. Build the knowledge base first.")
+    elif not issues:
+        st.info("No Jira snapshot found for the selected date.")
+    elif st.button("Ask Combined", type="primary"):
+        r = answer_jira_docs_question(config, BM25Index(chunks), q, issues, issue_analyses, daily_analysis, top_k=top_k)
+        st.subheader("Answer")
+        st.write(r.answer)
+        st.caption(f"Mode: {r.mode}")
+        st.subheader("Relevant Jira Context")
+        if r.jira_context:
+            st.dataframe(pd.DataFrame(r.jira_context), use_container_width=True)
+        else:
+            st.info("No Jira items were selected as relevant.")
+        st.subheader("Document Citations")
+        for i, c in enumerate(r.doc_citations, start=1):
             st.markdown(f"**{i}. {' / '.join(c.get('section_path', [])) or 'Unknown section'}**")
             st.code(c.get("quote", ""), language="text")
             st.caption(c.get("source_path", ""))
