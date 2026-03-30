@@ -32,7 +32,7 @@ The crawler extracts `jql` from each configured Jira URL and queries Jira throug
 - `issue_key` starting with `[SV]` is treated as an `SV` issue
 - `issue_key` starting with `[DV]` is treated as a `DV` issue
 - Set `reporting.team_filter` in `config.yaml` to `SV` or `DV` to filter report/analyze runs
-- Streamlit also exposes a team filter for interactive browsing and combined QA
+- Streamlit also exposes a team filter for interactive browsing, combined QA, and dynamic report/dashboard recalculation
 
 ## Main Commands
 
@@ -72,4 +72,5 @@ The system falls back to retrieval-only or rule-based answers if the configured 
 
 - `Manage Knowledge` supports uploading PDF/PPTX/XLSX/DOCX and rebuilding the local knowledge base
 - `Ask Jira + Docs` combines the selected day's Jira snapshot with local document retrieval
+- `Dashboard` and `Daily Reports` follow the current Streamlit team filter in real time
 - PDF conversion supports a local `pdftotext` fallback for large spec PDFs

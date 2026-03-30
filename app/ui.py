@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -10,17 +9,30 @@ from app.config import load_config
 from app.docs import BM25Index, DocumentConverter
 from app.models import IssueRecord, infer_team_from_issue_key
 from app.qa import answer_jira_docs_question, answer_question
+from app.reporting import build_daily_report, render_markdown
 from app.repository import Repository
 
 
 st.set_page_config(page_title="Jira Summary", layout="wide")
 config = load_config()
 repo = Repository(config.storage.database_path)
+def issue_analysis_dict(report_date: str, issue_keys: set[str]) -> dict[str, dict]:
+    return {
+        item.issue_key: item.to_dict()
+        for item in repo.load_issue_analyses(report_date)
+        if item.issue_key in issue_keys
+    }
 
 
-def report_payload(report_date: str) -> dict:
-    path = Path(config.storage.output_dir) / "daily" / report_date / "report.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+def build_filtered_view(report_date: str, issues: list[IssueRecord]) -> tuple[object, dict[str, dict], object | None]:
+    issue_keys = {issue.issue_key for issue in issues}
+    deltas = [item for item in repo.load_deltas(report_date) if item.issue_key in issue_keys]
+    stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days) & issue_keys
+    report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config)
+    issue_analyses = issue_analysis_dict(report_date, issue_keys)
+    configured_team = config.reporting.team_filter or "All"
+    daily_analysis = repo.load_daily_analysis(report_date) if team_filter == configured_team else None
+    return report_obj, issue_analyses, daily_analysis
 
 
 def save_uploads(files) -> list[str]:
@@ -69,10 +81,10 @@ default_team = config.reporting.team_filter or "All"
 team_filter = st.sidebar.selectbox("Team Filter", available_teams(issues_for_date), index=max(0, available_teams(issues_for_date).index(default_team)) if default_team in available_teams(issues_for_date) else 0) if issues_for_date else default_team
 filtered_issues = apply_team_filter(issues_for_date, team_filter)
 filtered_issue_keys = {issue.issue_key for issue in filtered_issues}
-report = report_payload(selected_date) if selected_date else {}
+filtered_report, filtered_issue_analyses, filtered_daily_analysis = build_filtered_view(selected_date, filtered_issues) if selected_date else (None, {}, None)
 
 if view == "Dashboard":
-    metrics = report.get("metrics", {})
+    metrics = filtered_report.metrics.to_dict() if filtered_report else {}
     cols = st.columns(5)
     for col, label, key in zip(
         cols,
@@ -83,21 +95,27 @@ if view == "Dashboard":
     status_counts = metrics.get("status_counts", {})
     if status_counts:
         st.bar_chart(pd.DataFrame.from_dict(status_counts, orient="index", columns=["count"]))
-    daily_analysis = report.get("daily_analysis") or {}
-    if daily_analysis:
+    if filtered_daily_analysis:
         st.subheader("AI Summary")
-        st.write(daily_analysis.get("overall_health", "-"))
+        st.write(filtered_daily_analysis.overall_health)
         for label in ["top_risks", "suspected_root_causes", "recommended_actions", "watch_items"]:
             st.markdown(f"**{label.replace('_', ' ').title()}**")
-            for item in daily_analysis.get(label, []):
+            for item in getattr(filtered_daily_analysis, label):
                 st.write(f"- {item}")
+    elif team_filter != (config.reporting.team_filter or "All"):
+        st.info("当前 Dashboard 指标已按页面团队筛选实时重算。AI Summary 仍只展示与配置默认团队一致的已落库分析结果。")
 
 elif view == "Daily Reports":
     report_dir = Path(config.storage.output_dir) / "daily" / selected_date
+    if filtered_report:
+        st.markdown(render_markdown(filtered_report, filtered_daily_analysis, filtered_issue_analyses))
+    if team_filter != "All":
+        st.caption(f"当前页面内容为团队筛选 `{team_filter}` 的实时视图；下方下载文件仍是上次生成的原始日报产物。")
     for name in ["report.md", "report.html", "report.pdf"]:
         path = report_dir / name
         if path.exists() and name.endswith(".md"):
-            st.markdown(path.read_text(encoding="utf-8"))
+            with st.expander("Stored Markdown Artifact", expanded=False):
+                st.code(path.read_text(encoding="utf-8"), language="markdown")
         elif path.exists():
             st.download_button(f"Download {path.suffix.upper().lstrip('.')}", path.read_bytes(), file_name=path.name)
 
