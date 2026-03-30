@@ -10,7 +10,7 @@ Recommended:
 
 Optional dependencies by capability:
 
-- `playwright`: Jira crawling
+- `jira`: Jira API crawling via URL + access token
 - `markitdown`: PPTX/XLSX/DOCX/PDF conversion
 - `weasyprint`: PDF report export
 - local OpenAI-compatible LLM service: Qwen answer generation
@@ -62,7 +62,7 @@ You can also upload documents directly from Streamlit and click `Rebuild Knowled
 
 ## Real Jira Workflow
 
-Install Playwright and browser runtime first, then:
+Configure `jira.base_url` and `jira.access_token` first, then:
 
 ```powershell
 $env:PYTHONPATH='.'
@@ -96,7 +96,7 @@ The configured OpenAI-compatible endpoint is not reachable. Retrieval still work
 
 ### `crawl` fails immediately
 
-Playwright is missing or Jira selectors do not match the real page.
+The Jira Python client is missing, `jira.access_token` is invalid, or the configured JQL is invalid.
 
 ## Recommended Next Steps
 

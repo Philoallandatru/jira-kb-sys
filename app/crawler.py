@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Iterable
+from urllib.parse import parse_qs, urlparse
 
 from app.config import JiraConfig
 from app.models import IssueDelta, IssueRecord
@@ -26,61 +26,82 @@ class JiraCrawler:
     def crawl(self, snapshot_date: str | None = None) -> CrawlResult:
         snapshot_date = snapshot_date or date.today().isoformat()
         try:
-            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-            from playwright.sync_api import sync_playwright
+            from jira import JIRA
         except ImportError as exc:
-            raise CrawlerError("Playwright is not installed. Install with `pip install -e .[playwright]`.") from exc
+            raise CrawlerError("jira is not installed. Install with `pip install jira`.") from exc
 
         issues: dict[str, IssueRecord] = {}
-        auth_path = Path(self.config.auth_state_path)
-        auth_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=str(auth_path)) if auth_path.exists() else browser.new_context()
-            page = context.new_page()
-            page.set_default_timeout(self.config.timeout_seconds * 1000)
-            if not auth_path.exists():
-                self._login(page)
-                context.storage_state(path=str(auth_path))
-            for jira_filter in self.config.project_filters:
-                try:
-                    page.goto(jira_filter.url, wait_until="networkidle")
-                except PlaywrightTimeoutError as exc:
-                    raise CrawlerError(f"Timeout loading Jira filter {jira_filter.name}") from exc
-                for row in page.locator(self.config.list_selector).all():
-                    issue = self._parse_issue_row(row, jira_filter.name)
-                    if issue.issue_key:
-                        issues[issue.issue_key] = issue
-            context.close()
-            browser.close()
+        timeout_ms = self.config.timeout_seconds * 1000
+        options = {"server": self.config.base_url, "timeout": timeout_ms}
+        try:
+            client = JIRA(options=options, token_auth=self.config.access_token.strip() or None)
+        except Exception as exc:  # pragma: no cover - depends on runtime Jira connectivity
+            raise CrawlerError(f"Failed to connect to Jira at {self.config.base_url}: {exc}") from exc
+
+        for jira_filter in self.config.project_filters:
+            query = self._extract_jql(jira_filter.url)
+            if not query:
+                continue
+            for issue in self._search_issues(client, query, jira_filter.name):
+                if issue.issue_key:
+                    issues[issue.issue_key] = issue
+
+        if self.config.jql:
+            for issue in self._search_issues(client, self.config.jql, "default"):
+                if issue.issue_key:
+                    issues[issue.issue_key] = issue
+
         return CrawlResult(snapshot_date=snapshot_date, issues=list(issues.values()))
 
-    def _login(self, page) -> None:
-        page.goto(self.config.login_url, wait_until="networkidle")
-        page.locator(self.config.username_selector).fill(self.config.username)
-        page.locator(self.config.password_selector).fill(self.config.password)
-        page.locator(self.config.submit_selector).click()
-        page.wait_for_load_state("networkidle")
+    def _extract_jql(self, url: str) -> str:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        jql = params.get("jql", [""])[0]
+        return jql.strip()
 
-    def _parse_issue_row(self, row, source_filter: str) -> IssueRecord:
-        def safe_text(selector: str) -> str | None:
-            locator = row.locator(selector)
-            return locator.first.inner_text().strip() if locator.count() else None
+    def _search_issues(self, client, jql: str, source_filter: str) -> list[IssueRecord]:
+        try:
+            result = client.search_issues(
+                jql_str=jql,
+                maxResults=self.config.max_results,
+                fields="summary,status,assignee,priority,updated,created,labels,components,description",
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime Jira connectivity
+            raise CrawlerError(f"Failed to query Jira by JQL `{jql}`: {exc}") from exc
+        return [self._to_issue_record(item, source_filter) for item in result]
 
-        key_locator = row.locator(self.config.issue_key_selector)
-        issue_key = key_locator.first.inner_text().strip() if key_locator.count() else ""
-        summary = safe_text(self.config.title_selector) or ""
+    def _to_issue_record(self, issue, source_filter: str) -> IssueRecord:
+        fields = issue.fields
         return IssueRecord(
-            issue_key=issue_key,
-            summary=summary,
-            status=safe_text(self.config.status_selector) or "Unknown",
-            assignee=safe_text(self.config.assignee_selector),
-            priority=safe_text(self.config.priority_selector),
-            updated_at=safe_text(self.config.updated_selector),
-            project=issue_key.split("-")[0] if issue_key else None,
+            issue_key=issue.key,
+            summary=getattr(fields, "summary", "") or "",
+            status=getattr(getattr(fields, "status", None), "name", "Unknown") or "Unknown",
+            assignee=getattr(getattr(fields, "assignee", None), "displayName", None),
+            priority=getattr(getattr(fields, "priority", None), "name", None),
+            updated_at=getattr(fields, "updated", None),
+            created_at=getattr(fields, "created", None),
+            labels=list(getattr(fields, "labels", []) or []),
+            components=[comp.name for comp in (getattr(fields, "components", []) or []) if getattr(comp, "name", None)],
+            description=self._extract_description(getattr(fields, "description", None)),
+            project=issue.key.split("-")[0] if issue.key else None,
             source_filter=source_filter,
         )
+
+    def _extract_description(self, description) -> str | None:
+        if description is None:
+            return None
+        if isinstance(description, str):
+            return description
+        if isinstance(description, dict):
+            values: list[str] = []
+            for block in description.get("content", []):
+                for node in block.get("content", []):
+                    text = node.get("text")
+                    if text:
+                        values.append(text)
+            return "\n".join(values) or None
+        return str(description)
 
 
 def derive_issue_deltas(current: Iterable[IssueRecord], previous: Iterable[IssueRecord]) -> list[IssueDelta]:

@@ -34,6 +34,8 @@ streamlit run app/ui.py
 
 The system falls back to retrieval-only or rule-based answers if the configured OpenAI-compatible endpoint is unavailable.
 
+For real Jira crawling, set `jira.base_url` and `jira.access_token` in `config.yaml`, and provide either `jira.jql` or filter URLs containing `jql=...`.
+
 ## Real Document Import
 
 ```powershell
