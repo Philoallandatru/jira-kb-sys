@@ -115,7 +115,7 @@ def answer_jira_docs_question(
             ),
             schema_hint=(
                 '{"answer":"string","doc_citations":[{"source_path":"string","section_path":["string"],"quote":"string"}],'
-                '"jira_context":[{"issue_key":"string","summary":"string","status":"string","reason":"string"}]}'
+                '"jira_context":[{"issue_key":"string","summary":"string","status":"string","team":"string","reason":"string"}]}'
             ),
         )
         return CombinedQAResult(
@@ -223,6 +223,7 @@ def _select_relevant_issues(
                         "issue_key": issue.issue_key,
                         "summary": issue.summary,
                         "status": issue.status,
+                        "team": issue.team,
                         "priority": issue.priority,
                         "assignee": issue.assignee,
                         "reason": reason,

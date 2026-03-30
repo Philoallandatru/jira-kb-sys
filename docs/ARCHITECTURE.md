@@ -41,7 +41,7 @@ This project is a Markdown-first Jira reporting and local knowledge QA system. I
 
 - `app/config.py`: configuration loading
 - `app/repository.py`: SQLite schema and persistence
-- `app/crawler.py`: Playwright-based Jira crawler and delta derivation
+- `app/crawler.py`: Jira Python client based crawler and delta derivation
 - `app/docs.py`: document conversion, PDF normalization, chunking, and BM25 search
 - `app/analysis.py`: daily and issue-level AI analysis
 - `app/qa.py`: ad hoc document QA over the local chunk index
@@ -70,7 +70,7 @@ This project is a Markdown-first Jira reporting and local knowledge QA system. I
 
 ## Current Limitations
 
-- Jira selectors still need tuning for a real Jira instance.
+- Jira access token and JQL need to be configured correctly for each real Jira instance.
 - Standards PDF heading normalization is improved but not document-perfect.
 - BM25 retrieval is precise for spec terms but weaker for purely semantic queries.
 - Streamlit is intended for lightweight internal use, not a multi-user production app.

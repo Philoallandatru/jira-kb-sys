@@ -9,22 +9,10 @@ def test_build_daily_report_marks_priority_issue(tmp_path):
         """
 jira:
   base_url: "https://jira.example.com"
-  login_url: "https://jira.example.com/login"
-  username: ""
-  password: ""
+  access_token: "dummy-token"
   project_filters: []
-  auth_state_path: "./data/jira_auth.json"
-  list_selector: "table tbody tr"
-  detail_link_selector: ""
-  username_selector: "input[name='username']"
-  password_selector: "input[name='password']"
-  submit_selector: "button[type='submit']"
-  issue_key_selector: "td"
-  title_selector: "td"
-  status_selector: "td"
-  assignee_selector: "td"
-  priority_selector: "td"
-  updated_selector: "td"
+  jql: "project = SSD"
+  max_results: 50
 docs:
   raw_dir: "./data/raw_docs"
   markdown_dir: "./data/markdown"

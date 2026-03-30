@@ -10,22 +10,10 @@ def test_combined_qa_fallback_selects_relevant_issue(tmp_path):
         """
 jira:
   base_url: "https://jira.example.com"
-  login_url: "https://jira.example.com/login"
-  username: ""
-  password: ""
+  access_token: "dummy-token"
   project_filters: []
-  auth_state_path: "./data/jira_auth.json"
-  list_selector: "table tbody tr"
-  detail_link_selector: ""
-  username_selector: "input[name='username']"
-  password_selector: "input[name='password']"
-  submit_selector: "button[type='submit']"
-  issue_key_selector: "td"
-  title_selector: "td"
-  status_selector: "td"
-  assignee_selector: "td"
-  priority_selector: "td"
-  updated_selector: "td"
+  jql: "project = SSD"
+  max_results: 50
 docs:
   raw_dir: "./data/raw_docs"
   markdown_dir: "./data/markdown"
@@ -46,13 +34,13 @@ reporting:
     )
     config = load_config(str(config_path))
     issues = [
-        IssueRecord(issue_key="SSD-101", summary="Admin queue timeout under load", status="Blocked", priority="High", project="SSD"),
-        IssueRecord(issue_key="SSD-102", summary="Telemetry mismatch", status="Open", priority="Low", project="SSD"),
+        IssueRecord(issue_key="[SV]SSD-101", summary="Admin queue timeout under load", status="Blocked", team="SV", priority="High", project="SSD"),
+        IssueRecord(issue_key="[DV]SSD-102", summary="Telemetry mismatch", status="Open", team="DV", priority="Low", project="SSD"),
     ]
     analyses = [
         IssueAIAnalysis(
             report_date="2026-03-30",
-            issue_key="SSD-101",
+            issue_key="[SV]SSD-101",
             summary="Admin queue timeout under load",
             suspected_root_cause="Queue head tail synchronization issue",
             evidence=["NVMe Admin Queue Recovery Notes"],
@@ -86,5 +74,6 @@ reporting:
     result = answer_jira_docs_question(config, BM25Index(chunks), "Which Jira item relates to admin queue timeout?", issues, analyses, daily)
     assert result.mode == "fallback"
     assert result.jira_context
-    assert result.jira_context[0]["issue_key"] == "SSD-101"
+    assert result.jira_context[0]["issue_key"] == "[SV]SSD-101"
+    assert result.jira_context[0]["team"] == "SV"
     assert result.doc_citations

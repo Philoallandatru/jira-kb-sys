@@ -15,22 +15,10 @@ class JiraFilter(BaseModel):
 
 class JiraConfig(BaseModel):
     base_url: str
-    login_url: str
-    username: str = ""
-    password: str = ""
+    access_token: str = ""
     project_filters: list[JiraFilter] = Field(default_factory=list)
-    auth_state_path: str
-    list_selector: str
-    detail_link_selector: str | None = None
-    username_selector: str
-    password_selector: str
-    submit_selector: str
-    issue_key_selector: str
-    title_selector: str
-    status_selector: str
-    assignee_selector: str
-    priority_selector: str
-    updated_selector: str
+    jql: str = ""
+    max_results: int = 200
     timeout_seconds: int = 45
 
 
@@ -60,6 +48,7 @@ class ReportingConfig(BaseModel):
     stale_days: int = 7
     risk_keywords: list[str] = Field(default_factory=list)
     top_issue_limit: int = 20
+    team_filter: str | None = None
 
 
 class AppConfig(BaseModel):
@@ -111,7 +100,6 @@ def load_config(config_path: str | None = None) -> AppConfig:
         config.docs.chunks_dir,
         config.storage.output_dir,
         Path(config.storage.database_path).parent,
-        Path(config.jira.auth_state_path).parent,
     ]:
         Path(path).mkdir(parents=True, exist_ok=True)
     return config

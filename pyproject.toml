@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "jinja2>=3.1.0",
+  "jira>=3.8.0",
   "markitdown>=0.1.1",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.4.0",
@@ -21,7 +22,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2.0"]
-playwright = ["playwright>=1.46.0"]
 pdf_fallback = ["marker-pdf>=1.4.3"]
 
 [project.scripts]

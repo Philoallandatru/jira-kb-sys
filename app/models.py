@@ -6,11 +6,21 @@ from datetime import datetime
 from typing import Any
 
 
+def infer_team_from_issue_key(issue_key: str) -> str | None:
+    key = issue_key.strip().upper()
+    if key.startswith("[SV]"):
+        return "SV"
+    if key.startswith("[DV]"):
+        return "DV"
+    return None
+
+
 @dataclass
 class IssueRecord:
     issue_key: str
     summary: str
     status: str
+    team: str | None = None
     assignee: str | None = None
     priority: str | None = None
     project: str | None = None

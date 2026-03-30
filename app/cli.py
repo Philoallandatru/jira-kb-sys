@@ -11,6 +11,7 @@ from app.config import AppConfig, load_config
 from app.crawler import JiraCrawler, derive_issue_deltas
 from app.demo import build_demo_chunks, build_demo_issues
 from app.docs import BM25Index, DocumentConverter
+from app.models import infer_team_from_issue_key
 from app.qa import answer_question
 from app.reporting import build_daily_report, render_markdown, write_report_files
 from app.repository import Repository
@@ -20,6 +21,13 @@ def _bootstrap(config_path: str | None = None) -> tuple[AppConfig, Repository]:
     config = load_config(config_path)
     repo = Repository(config.storage.database_path)
     return config, repo
+
+
+def _filter_issues_by_team(issues, team_filter: str | None):
+    if not team_filter:
+        return issues
+    normalized = team_filter.upper()
+    return [issue for issue in issues if (issue.team or infer_team_from_issue_key(issue.issue_key)) == normalized]
 
 
 def crawl(config_path: str | None = None) -> None:
@@ -59,13 +67,20 @@ def report(report_date: str | None = None, config_path: str | None = None) -> No
     run_id = repo.create_run("report", report_date, "running")
     try:
         issues = repo.load_snapshot(report_date)
+        issues = _filter_issues_by_team(issues, config.reporting.team_filter)
         if not issues:
             raise RuntimeError(f"No snapshot data found for {report_date}")
-        deltas = repo.load_deltas(report_date)
+        issue_keys = {item.issue_key for item in issues}
+        deltas = [delta for delta in repo.load_deltas(report_date) if delta.issue_key in issue_keys]
         stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days)
+        stale_keys = {key for key in stale_keys if key in issue_keys}
         daily_report = build_daily_report(report_date, issues, deltas, stale_keys, config, run_id=run_id)
         daily_analysis = repo.load_daily_analysis(report_date)
-        issue_analyses = {item.issue_key: item.to_dict() for item in repo.load_issue_analyses(report_date)}
+        issue_analyses = {
+            item.issue_key: item.to_dict()
+            for item in repo.load_issue_analyses(report_date)
+            if item.issue_key in issue_keys
+        }
         markdown_text = render_markdown(daily_report, daily_analysis, issue_analyses)
         paths = write_report_files(config, daily_report, markdown_text, daily_analysis, issue_analyses)
         repo.update_run(run_id, "success", json.dumps(paths, ensure_ascii=False))
@@ -81,10 +96,13 @@ def analyze(report_date: str | None = None, config_path: str | None = None) -> N
     run_id = repo.create_run("analyze", report_date, "running")
     try:
         issues = repo.load_snapshot(report_date)
+        issues = _filter_issues_by_team(issues, config.reporting.team_filter)
         if not issues:
             raise RuntimeError(f"No snapshot data found for {report_date}")
-        deltas = repo.load_deltas(report_date)
+        issue_keys = {item.issue_key for item in issues}
+        deltas = [delta for delta in repo.load_deltas(report_date) if delta.issue_key in issue_keys]
         stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days)
+        stale_keys = {key for key in stale_keys if key in issue_keys}
         report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config)
         chunks = repo.load_doc_chunks()
         daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, BM25Index(chunks), issues)
