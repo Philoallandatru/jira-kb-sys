@@ -5,8 +5,19 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Jira Summary Frontend",
-  description: "复古现代风格的 Jira KB 控制台",
+  description: "Retro-modern Jira, spec, and policy control deck.",
 };
+
+const navItems = [
+  { href: "/tasks", label: "Task Center" },
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/reports", label: "Daily Reports" },
+  { href: "/issues", label: "Issues" },
+  { href: "/docs-qa", label: "Docs QA" },
+  { href: "/jira-docs-qa", label: "Jira + Docs QA" },
+  { href: "/management-summary", label: "Management Summary" },
+  { href: "/settings", label: "Prompt Settings" },
+];
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
@@ -18,7 +29,9 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               <Link href="/" className="brand-title">
                 Jira Control Deck
               </Link>
-              <div className="brand-subtitle">复古现代风格的 Jira / Spec / Policy 智能控制台</div>
+              <div className="brand-subtitle">
+                A retro-modern workspace for Jira snapshots, specs, policy, and management reporting.
+              </div>
             </div>
             <div className="badge-row">
               <span className="badge">Vintage Ops</span>
@@ -26,6 +39,13 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
               <span className="badge">Management</span>
             </div>
           </header>
+          <nav className="section-nav" aria-label="Primary">
+            {navItems.map((item) => (
+              <Link key={item.href} href={item.href} className="nav-pill">
+                {item.label}
+              </Link>
+            ))}
+          </nav>
           {children}
         </div>
       </body>

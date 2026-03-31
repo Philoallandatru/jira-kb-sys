@@ -11,6 +11,7 @@ from app.config import AppConfig, load_config
 from app.crawler import JiraCrawler, derive_issue_deltas
 from app.demo import build_demo_chunks, build_demo_issues
 from app.docs import BM25Index, DocumentConverter
+from app.jira_knowledge import build_jira_chunks, filter_product_doc_chunks
 from app.management import build_management_summary, write_management_summary_files
 from app.models import infer_team_from_issue_key
 from app.qa import answer_question
@@ -31,33 +32,60 @@ def _filter_issues_by_team(issues, team_filter: str | None):
     return [issue for issue in issues if (issue.team or infer_team_from_issue_key(issue.issue_key)) == normalized]
 
 
-def crawl(config_path: str | None = None) -> None:
+def incremental_sync(config_path: str | None = None) -> None:
     config, repo = _bootstrap(config_path)
     snapshot_date = date.today().isoformat()
-    run_id = repo.create_run("crawl", snapshot_date, "running")
+    run_id = repo.create_run("incremental-sync", snapshot_date, "running")
     try:
-        result = JiraCrawler(config.jira).crawl(snapshot_date)
-        previous_date = repo.get_previous_snapshot_date(result.snapshot_date)
-        previous = repo.load_snapshot(previous_date) if previous_date else []
-        deltas = derive_issue_deltas(result.issues, previous)
-        repo.save_daily_snapshot(result.snapshot_date, result.issues)
-        repo.save_change_events(result.change_events)
-        repo.save_deltas(result.snapshot_date, deltas)
-        repo.update_run(run_id, "success", f"Crawled {len(result.issues)} issues")
-        print(f"Crawled {len(result.issues)} issues for {result.snapshot_date}")
+        _crawl_snapshot(config, repo, snapshot_date)
+        repo.update_run(run_id, "success", f"Synced snapshot for {snapshot_date}")
+        print(f"Incremental sync completed for {snapshot_date}")
     except Exception as exc:
         repo.update_run(run_id, "failed", str(exc))
         raise
+
+
+def full_sync(snapshot_date: str | None = None, config_path: str | None = None) -> None:
+    config, repo = _bootstrap(config_path)
+    resolved_date = snapshot_date or date.today().isoformat()
+    run_id = repo.create_run("full-sync", resolved_date, "running")
+    try:
+        _crawl_snapshot(config, repo, resolved_date)
+        repo.update_run(run_id, "success", f"Backfilled snapshot for {resolved_date}")
+        print(f"Full sync completed for {resolved_date}")
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+        raise
+
+
+def crawl(config_path: str | None = None) -> None:
+    incremental_sync(config_path=config_path)
+
+
+def _crawl_snapshot(config: AppConfig, repo: Repository, snapshot_date: str) -> None:
+    result = JiraCrawler(config.jira).crawl(snapshot_date)
+    previous_date = repo.get_previous_snapshot_date(result.snapshot_date)
+    previous = repo.load_snapshot(previous_date) if previous_date else []
+    deltas = derive_issue_deltas(result.issues, previous)
+    repo.save_daily_snapshot(result.snapshot_date, result.issues)
+    repo.save_change_events(result.change_events)
+    repo.save_deltas(result.snapshot_date, deltas)
 
 
 def build_docs(config_path: str | None = None) -> None:
     config, repo = _bootstrap(config_path)
     run_id = repo.create_run("build-docs", date.today().isoformat(), "running")
     try:
-        _, chunks = DocumentConverter(config.docs).build_documents()
-        repo.save_doc_chunks(chunks)
-        repo.update_run(run_id, "success", f"Indexed {len(chunks)} chunks")
-        print(f"Indexed {len(chunks)} chunks")
+        _, product_chunks = DocumentConverter(config.docs).build_documents()
+        jira_chunks = build_jira_chunks(repo, config.docs)
+        all_chunks = product_chunks + jira_chunks
+        repo.save_doc_chunks(all_chunks)
+        repo.update_run(
+            run_id,
+            "success",
+            f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)",
+        )
+        print(f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)")
     except Exception as exc:
         repo.update_run(run_id, "failed", str(exc))
         raise
@@ -106,7 +134,7 @@ def analyze(report_date: str | None = None, config_path: str | None = None) -> N
         stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days)
         stale_keys = {key for key in stale_keys if key in issue_keys}
         report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config)
-        chunks = repo.load_doc_chunks()
+        chunks = filter_product_doc_chunks(repo.load_doc_chunks())
         daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, BM25Index(chunks), issues)
         repo.save_daily_analysis(daily_analysis)
         repo.save_issue_analyses(issue_analyses)
@@ -132,7 +160,10 @@ def seed_demo(config_path: str | None = None) -> None:
         demo_dir = Path(config.docs.markdown_dir)
         demo_dir.mkdir(parents=True, exist_ok=True)
         for chunk in chunks:
-            Path(chunk.source_path).write_text(f"# {' / '.join(chunk.section_path)}\n\n{chunk.content}\n", encoding="utf-8")
+            Path(chunk.source_path).write_text(
+                f"# {' / '.join(chunk.section_path)}\n\n{chunk.content}\n",
+                encoding="utf-8",
+            )
         repo.update_run(run_id, "success", f"Seeded {len(demo_issues)} snapshots and {len(chunks)} chunks")
         print(f"Seeded demo data for dates: {', '.join(sorted(demo_issues.keys()))}")
     except Exception as exc:
@@ -153,7 +184,7 @@ def import_file(source_path: str, config_path: str | None = None) -> None:
 
 def ask(question: str, config_path: str | None = None, top_k: int = 5) -> None:
     config, repo = _bootstrap(config_path)
-    chunks = repo.load_doc_chunks()
+    chunks = filter_product_doc_chunks(repo.load_doc_chunks())
     if not chunks:
         raise RuntimeError("No document chunks found. Run `python -m app.cli build-docs` first.")
     result = answer_question(config, BM25Index(chunks), question, top_k=top_k)
@@ -172,7 +203,12 @@ def management_summary(
     try:
         from app.models import ManagementSummaryRequest
 
-        request = ManagementSummaryRequest(date_from=date_from, date_to=date_to, team=team, jira_status=jira_status or [])
+        request = ManagementSummaryRequest(
+            date_from=date_from,
+            date_to=date_to,
+            team=team,
+            jira_status=jira_status or [],
+        )
         result = build_management_summary(config, repo, request, run_id=run_id)
         repo.save_management_summary(run_id, request, result)
         paths = write_management_summary_files(config, result)
@@ -189,6 +225,9 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("crawl")
+    subparsers.add_parser("incremental-sync")
+    full_sync_parser = subparsers.add_parser("full-sync")
+    full_sync_parser.add_argument("--date", dest="snapshot_date", default=None)
     subparsers.add_parser("build-docs")
     subparsers.add_parser("seed-demo")
     import_parser = subparsers.add_parser("import-file")
@@ -209,6 +248,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "crawl":
         crawl(config_path=args.config_path)
+    elif args.command == "incremental-sync":
+        incremental_sync(config_path=args.config_path)
+    elif args.command == "full-sync":
+        full_sync(snapshot_date=args.snapshot_date, config_path=args.config_path)
     elif args.command == "build-docs":
         build_docs(config_path=args.config_path)
     elif args.command == "seed-demo":

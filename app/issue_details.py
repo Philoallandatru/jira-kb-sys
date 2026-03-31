@@ -8,6 +8,7 @@ from requests import RequestException
 from app.analysis import LLMClient
 from app.config import AppConfig
 from app.docs import BM25Index, SearchHit
+from app.jira_knowledge import filter_product_doc_chunks
 from app.models import DeepAnalysisCitation, IssueAIAnalysis, IssueDeepAnalysisResult, IssueRecord, utc_now_iso
 from app.repository import Repository
 
@@ -25,7 +26,7 @@ def build_issue_deep_analysis(
     if not issue:
         raise RuntimeError(f"Issue `{issue_key}` not found in snapshot {resolved_snapshot}")
 
-    chunks = repo.load_doc_chunks()
+    chunks = filter_product_doc_chunks(repo.load_doc_chunks())
     index = BM25Index(chunks)
     related_hits = index.search(
         " ".join(
@@ -53,7 +54,9 @@ def build_issue_deep_analysis(
                     "snapshot_date": resolved_snapshot,
                     "matched_documents": [_serialize_hit(hit) for hit in related_hits],
                     "related_issues": related_issues,
-                    "existing_issue_analysis": issue_analyses.get(issue.issue_key).to_dict() if issue.issue_key in issue_analyses else None,
+                    "existing_issue_analysis": issue_analyses.get(issue.issue_key).to_dict()
+                    if issue.issue_key in issue_analyses
+                    else None,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -108,25 +111,29 @@ def _fallback_issue_deep_analysis(
             policy_relations.append(note)
         elif category == "spec":
             spec_relations.append(note)
+
     suspected = []
     if cached_analysis:
-        suspected.append(f"已有分析认为可能根因是：{cached_analysis.suspected_root_cause}")
+        suspected.append(f"Existing issue analysis suggests root cause: {cached_analysis.suspected_root_cause}")
     if "block" in issue.status.lower():
-        suspected.append("当前状态仍包含阻塞信号，需要优先确认阻塞解除条件。")
+        suspected.append("Current status still signals a blocker and should be cleared before broader rollout.")
     if not spec_relations:
-        spec_relations.append("当前未检索到足够明确的 spec 证据。")
+        spec_relations.append("No strong spec evidence was retrieved from the local knowledge base.")
     if not policy_relations:
-        policy_relations.append("当前未检索到足够明确的 policy/design 证据。")
+        policy_relations.append("No strong policy or design guidance was retrieved from the local knowledge base.")
+
     next_actions = list(cached_analysis.action_needed if cached_analysis else [])
     if issue.assignee is None:
-        next_actions.append("先明确唯一 owner，再推进根因定位与修复计划。")
+        next_actions.append("Assign a clear owner before driving further debugging or remediation work.")
     if not next_actions:
-        next_actions.append("补充日志、复现路径和 spec/policy 对照结论。")
+        next_actions.append("Collect logs, reproduce the issue, and compare behavior against spec and policy evidence.")
+
     open_questions = []
     if issue.priority and issue.priority.lower() in {"highest", "high", "critical", "p0", "p1"}:
-        open_questions.append("高优先级问题的发布门禁和回归验证是否已经明确？")
+        open_questions.append("Are the release gate and regression criteria for this high-priority issue explicit?")
     if not issue.description:
-        open_questions.append("Jira 描述较少，是否需要补充复现步骤、影响范围和期望行为？")
+        open_questions.append("Should Jira be updated with reproduction steps, impact, and expected behavior?")
+
     return IssueDeepAnalysisResult(
         issue_key=issue.issue_key,
         generated_at=utc_now_iso(),
@@ -134,9 +141,9 @@ def _fallback_issue_deep_analysis(
         spec_relations=spec_relations,
         policy_relations=policy_relations,
         related_jira_designs=[item["issue_key"] + ": " + str(item["summary"]) for item in related_issues[:5]],
-        suspected_problems=suspected or ["当前证据不足以形成稳定结论。"],
+        suspected_problems=suspected or ["Evidence is currently too weak to support a stable conclusion."],
         next_actions=next_actions,
-        open_questions=open_questions or ["是否已经收集到足够的 root cause 证据？"],
+        open_questions=open_questions or ["Is there enough root-cause evidence to make a confident decision?"],
         confidence="medium" if hits else "low",
         citations=citations[:6],
         raw_response="offline-fallback",
@@ -148,13 +155,34 @@ def _related_issues(
     issues: list[IssueRecord],
     issue_analyses: dict[str, IssueAIAnalysis],
 ) -> list[dict[str, str | list[str]]]:
-    current_tokens = set(_tokenize(" ".join(filter(None, [issue.summary, issue.description or "", " ".join(issue.labels), " ".join(issue.components)]))))
+    current_tokens = set(
+        _tokenize(
+            " ".join(
+                filter(
+                    None,
+                    [issue.summary, issue.description or "", " ".join(issue.labels), " ".join(issue.components)],
+                )
+            )
+        )
+    )
     scored = []
     for candidate in issues:
         if candidate.issue_key == issue.issue_key:
             continue
         candidate_tokens = set(
-            _tokenize(" ".join(filter(None, [candidate.summary, candidate.description or "", " ".join(candidate.labels), " ".join(candidate.components)])))
+            _tokenize(
+                " ".join(
+                    filter(
+                        None,
+                        [
+                            candidate.summary,
+                            candidate.description or "",
+                            " ".join(candidate.labels),
+                            " ".join(candidate.components),
+                        ],
+                    )
+                )
+            )
         )
         overlap = len(current_tokens & candidate_tokens)
         if overlap == 0:

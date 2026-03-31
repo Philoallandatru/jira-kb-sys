@@ -8,6 +8,21 @@ export type ManagementSummaryRequest = {
   jira_status?: string[];
 };
 
+export type SyncTaskRequest = {
+  snapshot_date?: string;
+  config_path?: string | null;
+};
+
+export type TaskRun = {
+  id: number;
+  run_type: string;
+  run_date: string;
+  status: string;
+  details: string | null;
+  details_json: unknown;
+  created_at: string;
+};
+
 export type ManagementSummaryResult = {
   summary_id: number | null;
   generated_at: string;
@@ -163,6 +178,54 @@ export type PromptSettings = {
   custom_prompts: Record<string, string>;
 };
 
+export type DocsQARequest = {
+  question: string;
+  top_k?: number;
+  config_path?: string | null;
+};
+
+export type DocsQAResponse = {
+  question: string;
+  answer: string;
+  citations: {
+    source_path: string;
+    section_path: string[];
+    quote: string;
+    score?: number;
+  }[];
+  mode: string;
+  raw_response: string;
+};
+
+export type JiraDocsQARequest = DocsQARequest & {
+  snapshot_date?: string | null;
+};
+
+export type JiraDocsQAResponse = {
+  snapshot_date: string;
+  question: string;
+  answer: string;
+  doc_citations: {
+    source_path: string;
+    section_path: string[];
+    quote: string;
+    score?: number;
+  }[];
+  jira_context: {
+    issue_key: string;
+    summary: string;
+    status: string;
+    team?: string | null;
+    priority?: string | null;
+    assignee?: string | null;
+    reason: string;
+    ai_root_cause?: string;
+    ai_actions?: string[];
+  }[];
+  mode: string;
+  raw_response: string;
+};
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -173,7 +236,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    throw new Error(`请求失败: ${response.status}`);
+    throw new Error(`Request failed: ${response.status}`);
   }
   return (await response.json()) as T;
 }
@@ -183,6 +246,56 @@ export async function createManagementSummaryTask(payload: ManagementSummaryRequ
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function createIncrementalSyncTask(payload: SyncTaskRequest = {}) {
+  return apiFetch<{ id: number; status: string }>("/tasks/sync/incremental", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createFullSyncTask(payload: SyncTaskRequest = {}) {
+  return apiFetch<{ id: number; status: string }>("/tasks/sync/full", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createCrawlTask() {
+  return apiFetch<{ id: number; status: string }>("/tasks/crawl", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function createBuildDocsTask() {
+  return apiFetch<{ id: number; status: string }>("/tasks/build-docs", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function createAnalyzeTask(payload: { report_date?: string }) {
+  return apiFetch<{ id: number; status: string }>("/tasks/analyze", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createDailyReportTask(payload: { report_date?: string }) {
+  return apiFetch<{ id: number; status: string }>("/tasks/report", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listTasks(limit = 50) {
+  return apiFetch<{ items: TaskRun[] }>(`/tasks?limit=${limit}`);
+}
+
+export async function getTask(runId: number) {
+  return apiFetch<TaskRun>(`/tasks/${runId}`);
 }
 
 export async function getManagementSummary(taskId: number) {
@@ -256,6 +369,20 @@ export async function getPromptSettings() {
 export async function updatePromptSettings(payload: PromptSettings) {
   return apiFetch<PromptSettings>("/settings/prompts", {
     method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function askDocsQuestion(payload: DocsQARequest) {
+  return apiFetch<DocsQAResponse>("/qa/docs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function askJiraDocsQuestion(payload: JiraDocsQARequest) {
+  return apiFetch<JiraDocsQAResponse>("/qa/jira-docs", {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

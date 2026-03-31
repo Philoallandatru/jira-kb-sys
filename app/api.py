@@ -10,15 +10,16 @@ from pydantic import BaseModel, Field
 
 from app.analysis import analyze_daily_report
 from app.cli import _bootstrap
-from app.docs import BM25Index
+from app.docs import BM25Index, DocumentConverter
 from app.issue_details import build_issue_deep_analysis
+from app.jira_knowledge import build_jira_chunks, filter_product_doc_chunks
 from app.management import build_management_summary, write_management_summary_files
 from app.models import ManagementSummaryRequest
 from app.qa import answer_jira_docs_question, answer_question
-from app.reporting import build_daily_report
+from app.reporting import build_daily_report, render_markdown, write_report_files
 
 
-app = FastAPI(title="Jira Summary API", version="0.3.0")
+app = FastAPI(title="Jira Summary API", version="0.4.0")
 
 
 class ManagementSummaryTaskRequest(BaseModel):
@@ -26,6 +27,20 @@ class ManagementSummaryTaskRequest(BaseModel):
     date_to: str
     team: str | None = None
     jira_status: list[str] = Field(default_factory=list)
+    config_path: str | None = None
+
+
+class SimpleTaskRequest(BaseModel):
+    config_path: str | None = None
+
+
+class DailyTaskRequest(BaseModel):
+    report_date: str | None = None
+    config_path: str | None = None
+
+
+class SyncTaskRequest(BaseModel):
+    snapshot_date: str | None = None
     config_path: str | None = None
 
 
@@ -63,17 +78,194 @@ def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) 
         repo.update_run(run_id, "failed", str(exc))
 
 
+def _run_incremental_sync(run_id: int, request: SyncTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    snapshot_date = request.snapshot_date or date.today().isoformat()
+    try:
+        _crawl_snapshot(config, repo, snapshot_date)
+        repo.update_run(run_id, "success", f"Synced snapshot for {snapshot_date}")
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+
+
+def _run_full_sync(run_id: int, request: SyncTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    snapshot_date = request.snapshot_date or date.today().isoformat()
+    try:
+        _crawl_snapshot(config, repo, snapshot_date)
+        repo.update_run(run_id, "success", f"Backfilled snapshot for {snapshot_date}")
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+
+
+def _crawl_snapshot(config, repo, snapshot_date: str) -> None:
+    from app.crawler import JiraCrawler, derive_issue_deltas
+
+    result = JiraCrawler(config.jira).crawl(snapshot_date)
+    previous_date = repo.get_previous_snapshot_date(result.snapshot_date)
+    previous = repo.load_snapshot(previous_date) if previous_date else []
+    deltas = derive_issue_deltas(result.issues, previous)
+    repo.save_daily_snapshot(result.snapshot_date, result.issues)
+    repo.save_change_events(result.change_events)
+    repo.save_deltas(result.snapshot_date, deltas)
+
+
+def _run_crawl(run_id: int, request: SimpleTaskRequest) -> None:
+    _run_incremental_sync(run_id, SyncTaskRequest(config_path=request.config_path))
+
+
+def _run_build_docs(run_id: int, request: SimpleTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    try:
+        _, product_chunks = DocumentConverter(config.docs).build_documents()
+        jira_chunks = build_jira_chunks(repo, config.docs)
+        all_chunks = product_chunks + jira_chunks
+        repo.save_doc_chunks(all_chunks)
+        repo.update_run(
+            run_id,
+            "success",
+            f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)",
+        )
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+
+
+def _run_analyze(run_id: int, request: DailyTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    report_date = request.report_date or date.today().isoformat()
+    try:
+        issues = repo.load_snapshot(report_date)
+        issues = _filter_issues(issues, config.reporting.team_filter, [])
+        if not issues:
+            raise RuntimeError(f"No snapshot data found for {report_date}")
+        issue_keys = {item.issue_key for item in issues}
+        deltas = [delta for delta in repo.load_deltas(report_date) if delta.issue_key in issue_keys]
+        stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days)
+        stale_keys = {key for key in stale_keys if key in issue_keys}
+        report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config, run_id=run_id)
+        chunks = filter_product_doc_chunks(repo.load_doc_chunks())
+        daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, BM25Index(chunks), issues)
+        repo.save_daily_analysis(daily_analysis)
+        repo.save_issue_analyses(issue_analyses)
+        repo.update_run(run_id, "success", f"Analyzed {len(issue_analyses)} priority issues for {report_date}")
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+
+
+def _run_daily_report(run_id: int, request: DailyTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    report_date = request.report_date or date.today().isoformat()
+    try:
+        issues = repo.load_snapshot(report_date)
+        issues = _filter_issues(issues, config.reporting.team_filter, [])
+        if not issues:
+            raise RuntimeError(f"No snapshot data found for {report_date}")
+        issue_keys = {item.issue_key for item in issues}
+        deltas = [delta for delta in repo.load_deltas(report_date) if delta.issue_key in issue_keys]
+        stale_keys = repo.compute_stale_issue_keys(report_date, config.reporting.stale_days)
+        stale_keys = {key for key in stale_keys if key in issue_keys}
+        daily_report = build_daily_report(report_date, issues, deltas, stale_keys, config, run_id=run_id)
+        daily_analysis = repo.load_daily_analysis(report_date)
+        issue_analyses = {
+            item.issue_key: item.to_dict()
+            for item in repo.load_issue_analyses(report_date)
+            if item.issue_key in issue_keys
+        }
+        markdown_text = render_markdown(daily_report, daily_analysis, issue_analyses)
+        paths = write_report_files(config, daily_report, markdown_text, daily_analysis, issue_analyses)
+        repo.update_run(run_id, "success", json.dumps(paths, ensure_ascii=False))
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
 @app.post("/tasks/reports/management-summary")
-def create_management_summary_task(payload: ManagementSummaryTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
+def create_management_summary_task(
+    payload: ManagementSummaryTaskRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     run_id = repo.create_run("management-summary", payload.date_to, "queued")
     background_tasks.add_task(_run_management_summary, run_id, payload)
     return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/sync/incremental")
+def create_incremental_sync_task(
+    payload: SyncTaskRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    snapshot_date = payload.snapshot_date or date.today().isoformat()
+    run_id = repo.create_run("incremental-sync", snapshot_date, "queued")
+    background_tasks.add_task(_run_incremental_sync, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/sync/full")
+def create_full_sync_task(
+    payload: SyncTaskRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    snapshot_date = payload.snapshot_date or date.today().isoformat()
+    run_id = repo.create_run("full-sync", snapshot_date, "queued")
+    background_tasks.add_task(_run_full_sync, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/crawl")
+def create_crawl_task(payload: SimpleTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    snapshot_date = date.today().isoformat()
+    run_id = repo.create_run("crawl", snapshot_date, "queued")
+    background_tasks.add_task(_run_crawl, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/build-docs")
+def create_build_docs_task(payload: SimpleTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    run_id = repo.create_run("build-docs", date.today().isoformat(), "queued")
+    background_tasks.add_task(_run_build_docs, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/analyze")
+def create_analyze_task(payload: DailyTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    report_date = payload.report_date or date.today().isoformat()
+    run_id = repo.create_run("analyze", report_date, "queued")
+    background_tasks.add_task(_run_analyze, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/report")
+def create_report_task(payload: DailyTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    report_date = payload.report_date or date.today().isoformat()
+    run_id = repo.create_run("report", report_date, "queued")
+    background_tasks.add_task(_run_daily_report, run_id, payload)
+    return {"id": run_id, "status": "queued"}
+
+
+@app.get("/tasks")
+def list_tasks(limit: int = Query(default=50, ge=1, le=200), config_path: str | None = None) -> dict:
+    _, repo = _bootstrap(config_path)
+    return {"items": [_serialize_run(row) for row in repo.list_runs(limit=limit)]}
+
+
+@app.get("/tasks/{run_id}")
+def get_task(run_id: int, config_path: str | None = None) -> dict:
+    _, repo = _bootstrap(config_path)
+    row = repo.load_run(run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="run not found")
+    return _serialize_run(row)
 
 
 @app.get("/reports/management-summary/{run_id}")
@@ -97,7 +289,10 @@ def get_dashboard_overview(
     snapshot_date = _resolve_snapshot_date(repo, report_date)
     issues = _filter_issues(repo.load_snapshot(snapshot_date), team, jira_status)
     deltas = [delta for delta in repo.load_deltas(snapshot_date) if delta.issue_key in {issue.issue_key for issue in issues}]
-    stale = {key for key in repo.compute_stale_issue_keys(snapshot_date, config.reporting.stale_days) if key in {issue.issue_key for issue in issues}}
+    stale = {
+        key for key in repo.compute_stale_issue_keys(snapshot_date, config.reporting.stale_days)
+        if key in {issue.issue_key for issue in issues}
+    }
     report = build_daily_report(snapshot_date, issues, deltas, stale, config)
     daily_analysis = repo.load_daily_analysis(snapshot_date)
     return {
@@ -135,7 +330,12 @@ def list_daily_reports(limit: int = Query(default=14, ge=1, le=90), config_path:
 
 
 @app.get("/reports/daily/{report_date}")
-def get_daily_report(report_date: str, team: str | None = None, jira_status: list[str] = Query(default_factory=list), config_path: str | None = None) -> dict:
+def get_daily_report(
+    report_date: str,
+    team: str | None = None,
+    jira_status: list[str] = Query(default_factory=list),
+    config_path: str | None = None,
+) -> dict:
     config, repo = _bootstrap(config_path)
     snapshot_date = _resolve_snapshot_date(repo, report_date)
     issues = _filter_issues(repo.load_snapshot(snapshot_date), team, jira_status)
@@ -203,7 +403,12 @@ def get_issue_deep_analysis(issue_key: str, report_date: str | None = None, conf
 @app.post("/qa/docs")
 def post_docs_qa(payload: DocsQuestionPayload) -> dict:
     config, repo = _bootstrap(payload.config_path)
-    result = answer_question(config, BM25Index(repo.load_doc_chunks()), payload.question, top_k=payload.top_k)
+    result = answer_question(
+        config,
+        BM25Index(filter_product_doc_chunks(repo.load_doc_chunks())),
+        payload.question,
+        top_k=payload.top_k,
+    )
     return result.to_dict()
 
 
@@ -216,7 +421,7 @@ def post_jira_docs_qa(payload: JiraDocsQuestionPayload) -> dict:
     daily_analysis = repo.load_daily_analysis(snapshot_date)
     result = answer_jira_docs_question(
         config,
-        BM25Index(repo.load_doc_chunks()),
+        BM25Index(filter_product_doc_chunks(repo.load_doc_chunks())),
         payload.question,
         issues,
         issue_analyses,
@@ -255,8 +460,7 @@ def update_prompt_settings(payload: PromptSettingsPayload, config_path: str | No
 
 
 def _load_run(repo, run_id: int):
-    with repo.connect() as conn:
-        row = conn.execute("SELECT status, details FROM runs WHERE id = ?", (run_id,)).fetchone()
+    row = repo.load_run(run_id)
     if not row:
         raise HTTPException(status_code=404, detail="run not found")
     return row
@@ -287,3 +491,22 @@ def _filter_issues(issues, team: str | None, jira_status: list[str]):
 def _load_config_only(config_path: str | None = None):
     config, _ = _bootstrap(config_path)
     return config
+
+
+def _serialize_run(row: dict) -> dict:
+    details = row.get("details")
+    parsed_details = None
+    if isinstance(details, str) and details:
+        try:
+            parsed_details = json.loads(details)
+        except json.JSONDecodeError:
+            parsed_details = None
+    return {
+        "id": row["id"],
+        "run_type": row["run_type"],
+        "run_date": row["run_date"],
+        "status": row["status"],
+        "details": details,
+        "details_json": parsed_details,
+        "created_at": row["created_at"],
+    }

@@ -117,6 +117,31 @@ class Repository:
             conn.execute("UPDATE runs SET status = ?, details = ? WHERE id = ?", (status, details, run_id))
             conn.commit()
 
+    def list_runs(self, limit: int = 50) -> list[dict[str, str | int | None]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, run_type, run_date, status, details, created_at
+                FROM runs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_run(self, run_id: int) -> dict[str, str | int | None] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, run_type, run_date, status, details, created_at
+                FROM runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def save_daily_snapshot(self, snapshot_date: str, issues: list[IssueRecord]) -> None:
         with self.connect() as conn:
             for issue in issues:
