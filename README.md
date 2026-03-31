@@ -62,6 +62,8 @@
 
 这意味着现在开始独立前端是低风险的，不需要先推倒当前系统。
 
+当前独立前端骨架已经创建在 `frontend/`。
+
 ## 配置示例
 
 `config.yaml`:
@@ -101,6 +103,21 @@ streamlit run app/ui.py
 uvicorn app.api:app --reload
 ```
 
+独立前端运行：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+如需指定后端地址：
+
+```powershell
+$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
+npm run dev
+```
+
 ## Streamlit 运维台页面
 
 - `Dashboard`
@@ -118,6 +135,19 @@ uvicorn app.api:app --reload
 - `GET /reports/management-summary/{id}`
 
 这两条接口已经足够作为独立前端第一批页面的后端基础。
+
+## 当前独立前端已包含的页面
+
+- `/`
+  - 首页与导航
+- `/management-summary`
+  - 管理层摘要任务提交与结果轮询
+- `/dashboard`
+  - 占位页
+- `/reports`
+  - 占位页
+- `/issues`
+  - 占位页
 
 ## 当前建议的下一步
 

@@ -99,6 +99,21 @@ uvicorn app.api:app --reload
 - `POST /tasks/reports/management-summary`
 - `GET /reports/management-summary/{id}`
 
+### 独立前端运行
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+如需指定后端地址：
+
+```powershell
+$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
+npm run dev
+```
+
 ## 产物位置
 
 ### 日报输出
@@ -147,6 +162,12 @@ Streamlit 目前定位为内部运维台，适合：
 3. 再接 Dashboard、日报、Jira 列表
 4. 再接单 Jira 深度分析
 5. 最后接问答和知识库管理
+
+当前状态：
+
+- `frontend/` 骨架已创建
+- `Management Summary` 页面已可工作
+- `Dashboard / Reports / Issues` 仍为占位页
 
 ## 故障排查
 
