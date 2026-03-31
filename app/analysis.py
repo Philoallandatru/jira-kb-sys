@@ -9,13 +9,14 @@ from requests import RequestException
 from app.config import AppConfig
 from app.docs import BM25Index, SearchHit
 from app.models import DailyAIAnalysis, DailyReport, IssueAIAnalysis, IssueRecord
+from app.prompts import scenario_system_prompt
 
 
 class LLMClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def chat_json(self, prompt: str, schema_hint: str) -> dict[str, Any]:
+    def chat_json(self, prompt: str, schema_hint: str, scenario: str = "docs_qa", max_output_tokens: int | None = None) -> dict[str, Any]:
         response = requests.post(
             self.config.llm.base_url.rstrip("/") + "/chat/completions",
             headers={
@@ -28,14 +29,11 @@ class LLMClient:
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "You are an engineering assistant. Use only provided evidence. "
-                            "Separate Jira facts from inference and say when evidence is insufficient. "
-                            f"Return JSON matching: {schema_hint}"
-                        ),
+                        "content": scenario_system_prompt(self.config, scenario, schema_hint),
                     },
                     {"role": "user", "content": prompt},
                 ],
+                "max_tokens": max_output_tokens or self.config.llm.max_output_tokens,
                 "response_format": {"type": "json_object"},
             },
             timeout=self.config.llm.timeout_seconds,
@@ -64,6 +62,7 @@ def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index
         daily_response = client.chat_json(
             prompt=json.dumps({"report": report.to_dict(), "issue_analyses": issue_context}, ensure_ascii=False, indent=2),
             schema_hint='{"overall_health":"string","top_risks":["string"],"suspected_root_causes":["string"],"recommended_actions":["string"],"watch_items":["string"]}',
+            scenario="daily_report",
         )
         daily_analysis = DailyAIAnalysis(
             report_date=report.report_date,
@@ -98,6 +97,7 @@ def _analyze_issue(client: LLMClient, report_date: str, issue: IssueRecord, hits
             indent=2,
         ),
         schema_hint='{"summary":"string","suspected_root_cause":"string","evidence":["string"],"action_needed":["string"],"confidence":"low|medium|high"}',
+        scenario="issue_deep_analysis",
     )
     return IssueAIAnalysis(
         report_date=report_date,

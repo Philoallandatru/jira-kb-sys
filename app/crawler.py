@@ -111,7 +111,14 @@ def derive_issue_deltas(current: Iterable[IssueRecord], previous: Iterable[Issue
             deltas.append(IssueDelta(issue_key=issue.issue_key, change_type="new", current_status=issue.status, details="New issue"))
             continue
         if prev.status != issue.status:
-            change_type = "closed" if issue.status.lower() in {"done", "closed", "resolved"} else "status_changed"
+            prev_closed = prev.status.lower() in {"done", "closed", "resolved"}
+            current_closed = issue.status.lower() in {"done", "closed", "resolved"}
+            if current_closed:
+                change_type = "closed"
+            elif prev_closed and not current_closed:
+                change_type = "reopened"
+            else:
+                change_type = "status_changed"
             deltas.append(
                 IssueDelta(
                     issue_key=issue.issue_key,

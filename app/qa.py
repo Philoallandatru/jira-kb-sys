@@ -60,6 +60,7 @@ def answer_question(config: AppConfig, index: BM25Index, question: str, top_k: i
                 indent=2,
             ),
             schema_hint='{"answer":"string","citations":[{"source_path":"string","section_path":["string"],"quote":"string"}]}',
+            scenario="docs_qa",
         )
         llm_citations = payload.get("citations")
         return QAResult(
@@ -117,6 +118,7 @@ def answer_jira_docs_question(
                 '{"answer":"string","doc_citations":[{"source_path":"string","section_path":["string"],"quote":"string"}],'
                 '"jira_context":[{"issue_key":"string","summary":"string","status":"string","team":"string","reason":"string"}]}'
             ),
+            scenario="jira_docs_qa",
         )
         return CombinedQAResult(
             question=question,

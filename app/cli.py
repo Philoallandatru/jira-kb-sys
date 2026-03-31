@@ -11,6 +11,7 @@ from app.config import AppConfig, load_config
 from app.crawler import JiraCrawler, derive_issue_deltas
 from app.demo import build_demo_chunks, build_demo_issues
 from app.docs import BM25Index, DocumentConverter
+from app.management import build_management_summary, write_management_summary_files
 from app.models import infer_team_from_issue_key
 from app.qa import answer_question
 from app.reporting import build_daily_report, render_markdown, write_report_files
@@ -158,6 +159,29 @@ def ask(question: str, config_path: str | None = None, top_k: int = 5) -> None:
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 
 
+def management_summary(
+    date_from: str,
+    date_to: str,
+    team: str | None = None,
+    jira_status: list[str] | None = None,
+    config_path: str | None = None,
+) -> None:
+    config, repo = _bootstrap(config_path)
+    run_id = repo.create_run("management-summary", date_to, "running")
+    try:
+        from app.models import ManagementSummaryRequest
+
+        request = ManagementSummaryRequest(date_from=date_from, date_to=date_to, team=team, jira_status=jira_status or [])
+        result = build_management_summary(config, repo, request, run_id=run_id)
+        repo.save_management_summary(run_id, request, result)
+        paths = write_management_summary_files(config, result)
+        repo.update_run(run_id, "success", json.dumps(paths, ensure_ascii=False))
+        print(json.dumps({"run_id": run_id, "paths": paths}, ensure_ascii=False, indent=2))
+    except Exception as exc:
+        repo.update_run(run_id, "failed", str(exc))
+        raise
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="jira-summary")
     parser.add_argument("--config", dest="config_path", default=None)
@@ -175,6 +199,11 @@ def main() -> None:
     report_parser.add_argument("--date", dest="report_date", default=None)
     analyze_parser = subparsers.add_parser("analyze")
     analyze_parser.add_argument("--date", dest="report_date", default=None)
+    mgmt_parser = subparsers.add_parser("management-summary")
+    mgmt_parser.add_argument("--date-from", required=True, dest="date_from")
+    mgmt_parser.add_argument("--date-to", required=True, dest="date_to")
+    mgmt_parser.add_argument("--team", default=None)
+    mgmt_parser.add_argument("--jira-status", dest="jira_status", action="append", default=[])
 
     args = parser.parse_args()
     if args.command == "crawl":
@@ -191,6 +220,14 @@ def main() -> None:
         report(report_date=args.report_date, config_path=args.config_path)
     elif args.command == "analyze":
         analyze(report_date=args.report_date, config_path=args.config_path)
+    elif args.command == "management-summary":
+        management_summary(
+            date_from=args.date_from,
+            date_to=args.date_to,
+            team=args.team,
+            jira_status=args.jira_status,
+            config_path=args.config_path,
+        )
 
 
 if __name__ == "__main__":

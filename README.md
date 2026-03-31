@@ -42,8 +42,10 @@ python -m app.cli crawl
 python -m app.cli build-docs
 python -m app.cli report --date 2026-03-31
 python -m app.cli analyze --date 2026-03-31
+python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
 python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
 streamlit run app/ui.py
+uvicorn app.api:app --reload
 ```
 
 ## Demo Mode
@@ -62,6 +64,7 @@ The system falls back to retrieval-only or rule-based answers if the configured 
 
 - `Dashboard`
 - `Daily Reports`
+- `Management Summary`
 - `Issue Explorer`
 - `Knowledge Hits`
 - `Ask Docs`
@@ -73,4 +76,6 @@ The system falls back to retrieval-only or rule-based answers if the configured 
 - `Manage Knowledge` supports uploading PDF/PPTX/XLSX/DOCX and rebuilding the local knowledge base
 - `Ask Jira + Docs` combines the selected day's Jira snapshot with local document retrieval
 - `Dashboard` and `Daily Reports` follow the current Streamlit team filter in real time
+- `Management Summary` generates a management-facing summary for recently updated Jira issues
 - PDF conversion supports a local `pdftotext` fallback for large spec PDFs
+- FastAPI now exposes `POST /tasks/reports/management-summary` and `GET /reports/management-summary/{id}`

@@ -26,6 +26,9 @@ llm:
   api_key: "dummy"
   model: "qwen3.5-35b"
   timeout_seconds: 120
+  default_language: "zh-CN"
+  max_output_tokens: 4096
+  custom_prompts: {}
 
 reporting:
   stale_days: 7

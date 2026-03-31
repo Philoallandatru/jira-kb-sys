@@ -42,6 +42,9 @@ class LLMConfig(BaseModel):
     api_key: str
     model: str
     timeout_seconds: int = 120
+    default_language: str = "zh-CN"
+    max_output_tokens: int = 4096
+    custom_prompts: dict[str, str] = Field(default_factory=dict)
 
 
 class ReportingConfig(BaseModel):

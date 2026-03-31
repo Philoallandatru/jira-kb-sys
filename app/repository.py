@@ -7,7 +7,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterator
 
-from app.models import DailyAIAnalysis, DocChunk, IssueAIAnalysis, IssueDelta, IssueRecord
+from app.models import (
+    DailyAIAnalysis,
+    DocChunk,
+    IssueAIAnalysis,
+    IssueDelta,
+    IssueRecord,
+    ManagementSummaryMetrics,
+    ManagementSummaryRequest,
+    ManagementSummaryResult,
+)
 
 
 class Repository:
@@ -76,6 +85,11 @@ class Repository:
                     data_json TEXT NOT NULL,
                     PRIMARY KEY (report_date, issue_key)
                 );
+                CREATE TABLE IF NOT EXISTS ai_management_summary (
+                    run_id INTEGER PRIMARY KEY,
+                    request_json TEXT NOT NULL,
+                    data_json TEXT NOT NULL
+                );
                 """
             )
             conn.commit()
@@ -139,6 +153,19 @@ class Repository:
             rows = conn.execute(
                 "SELECT details_json FROM issue_events_derived WHERE snapshot_date = ? ORDER BY issue_key",
                 (snapshot_date,),
+            ).fetchall()
+        return [IssueDelta(**json.loads(row["details_json"])) for row in rows]
+
+    def load_deltas_in_range(self, date_from: str, date_to: str) -> list[IssueDelta]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT details_json
+                FROM issue_events_derived
+                WHERE snapshot_date >= ? AND snapshot_date <= ?
+                ORDER BY snapshot_date, issue_key
+                """,
+                (date_from, date_to),
             ).fetchall()
         return [IssueDelta(**json.loads(row["details_json"])) for row in rows]
 
@@ -220,6 +247,14 @@ class Repository:
             rows = conn.execute("SELECT DISTINCT snapshot_date FROM issues_daily_snapshot ORDER BY snapshot_date DESC").fetchall()
         return [row["snapshot_date"] for row in rows]
 
+    def latest_snapshot_on_or_before(self, snapshot_date: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT DISTINCT snapshot_date FROM issues_daily_snapshot WHERE snapshot_date <= ? ORDER BY snapshot_date DESC LIMIT 1",
+                (snapshot_date,),
+            ).fetchone()
+        return row["snapshot_date"] if row else None
+
     def compute_stale_issue_keys(self, snapshot_date: str, stale_days: int) -> set[str]:
         stale_keys: set[str] = set()
         cutoff = datetime.fromisoformat(snapshot_date) - timedelta(days=stale_days)
@@ -233,3 +268,37 @@ class Repository:
             if updated < cutoff:
                 stale_keys.add(issue.issue_key)
         return stale_keys
+
+    def save_management_summary(self, run_id: int, request: ManagementSummaryRequest, result: ManagementSummaryResult) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_management_summary (run_id, request_json, data_json) VALUES (?, ?, ?)",
+                (
+                    run_id,
+                    json.dumps(request.to_dict(), ensure_ascii=False),
+                    json.dumps(result.to_dict(), ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+
+    def load_management_summary(self, run_id: int) -> ManagementSummaryResult | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT data_json FROM ai_management_summary WHERE run_id = ?", (run_id,)).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["data_json"])
+        return ManagementSummaryResult(
+            summary_id=payload["summary_id"],
+            generated_at=payload["generated_at"],
+            request=ManagementSummaryRequest(**payload["request"]),
+            metrics=ManagementSummaryMetrics(**payload["metrics"]),
+            latest_progress_overview=payload["latest_progress_overview"],
+            key_recent_changes=payload["key_recent_changes"],
+            current_risks_and_blockers=payload["current_risks_and_blockers"],
+            root_cause_and_pattern_observations=payload["root_cause_and_pattern_observations"],
+            recommended_management_actions=payload["recommended_management_actions"],
+            data_gaps=payload["data_gaps"],
+            referenced_issue_keys=payload["referenced_issue_keys"],
+            referenced_metrics=payload["referenced_metrics"],
+            raw_response=payload["raw_response"],
+        )

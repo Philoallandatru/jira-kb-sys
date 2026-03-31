@@ -177,5 +177,69 @@ class IssueAIAnalysis:
         return asdict(self)
 
 
+@dataclass
+class ManagementSummaryRequest:
+    date_from: str
+    date_to: str
+    team: str | None = None
+    jira_status: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ManagementSummaryMetrics:
+    updated_issue_count: int
+    status_progress_count: int
+    closed_count: int
+    reopened_count: int
+    assignee_change_count: int
+    blocked_count: int
+    high_priority_open_count: int
+    team_distribution: dict[str, int]
+    status_distribution: dict[str, int]
+    issues_without_owner: int
+    issues_without_root_cause: int
+    referenced_issue_keys: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ManagementSummaryResult:
+    summary_id: int | None
+    generated_at: str
+    request: ManagementSummaryRequest
+    metrics: ManagementSummaryMetrics
+    latest_progress_overview: list[str]
+    key_recent_changes: list[str]
+    current_risks_and_blockers: list[str]
+    root_cause_and_pattern_observations: list[str]
+    recommended_management_actions: list[str]
+    data_gaps: list[str]
+    referenced_issue_keys: list[str]
+    referenced_metrics: dict[str, int | float | str]
+    raw_response: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary_id": self.summary_id,
+            "generated_at": self.generated_at,
+            "request": self.request.to_dict(),
+            "metrics": self.metrics.to_dict(),
+            "latest_progress_overview": self.latest_progress_overview,
+            "key_recent_changes": self.key_recent_changes,
+            "current_risks_and_blockers": self.current_risks_and_blockers,
+            "root_cause_and_pattern_observations": self.root_cause_and_pattern_observations,
+            "recommended_management_actions": self.recommended_management_actions,
+            "data_gaps": self.data_gaps,
+            "referenced_issue_keys": self.referenced_issue_keys,
+            "referenced_metrics": self.referenced_metrics,
+            "raw_response": self.raw_response,
+        }
+
+
 def utc_now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"

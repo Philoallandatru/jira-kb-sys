@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Jira 管理层摘要</title>
+  <style>
+    body { font-family: "Microsoft YaHei", sans-serif; margin: 32px; color: #222; }
+    h1, h2 { color: #0f172a; }
+    .meta { margin-bottom: 20px; color: #475569; }
+    .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; margin-bottom: 24px; }
+    ul { margin-top: 8px; }
+    li { margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Jira 管理层摘要</h1>
+  <div class="meta">
+    <div>时间范围: {{ result.request.date_from }} ~ {{ result.request.date_to }}</div>
+    <div>团队筛选: {{ result.request.team or "All" }}</div>
+    <div>状态筛选: {{ ", ".join(result.request.jira_status) if result.request.jira_status else "All" }}</div>
+    <div>生成时间: {{ result.generated_at }}</div>
+  </div>
+
+  <h2>核心指标</h2>
+  <div class="metrics">
+    <div>最近更新 Jira 数量: {{ result.metrics.updated_issue_count }}</div>
+    <div>状态推进数量: {{ result.metrics.status_progress_count }}</div>
+    <div>关闭数量: {{ result.metrics.closed_count }}</div>
+    <div>重开数量: {{ result.metrics.reopened_count }}</div>
+    <div>负责人变化数量: {{ result.metrics.assignee_change_count }}</div>
+    <div>当前阻塞数量: {{ result.metrics.blocked_count }}</div>
+    <div>高优先级未关闭数量: {{ result.metrics.high_priority_open_count }}</div>
+    <div>缺少负责人数: {{ result.metrics.issues_without_owner }}</div>
+  </div>
+
+  {% for title, items in [
+    ("最新进展概览", result.latest_progress_overview),
+    ("最近更新中的重点变化", result.key_recent_changes),
+    ("当前风险与阻塞", result.current_risks_and_blockers),
+    ("根因与模式观察", result.root_cause_and_pattern_observations),
+    ("给管理层的建议动作", result.recommended_management_actions),
+    ("数据不足", result.data_gaps),
+  ] %}
+    <h2>{{ title }}</h2>
+    <ul>
+      {% for item in items %}
+        <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  {% endfor %}
+</body>
+</html>
