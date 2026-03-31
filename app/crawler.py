@@ -6,7 +6,7 @@ from typing import Iterable
 from urllib.parse import parse_qs, urlparse
 
 from app.config import JiraConfig
-from app.models import IssueDelta, IssueRecord, infer_team_from_issue_key
+from app.models import IssueChangeEvent, IssueDelta, IssueRecord, infer_team_from_issue_key
 
 
 class CrawlerError(RuntimeError):
@@ -17,6 +17,7 @@ class CrawlerError(RuntimeError):
 class CrawlResult:
     snapshot_date: str
     issues: list[IssueRecord]
+    change_events: list[IssueChangeEvent]
 
 
 class JiraCrawler:
@@ -31,6 +32,7 @@ class JiraCrawler:
             raise CrawlerError("jira is not installed. Install with `pip install jira`.") from exc
 
         issues: dict[str, IssueRecord] = {}
+        change_events: dict[str, IssueChangeEvent] = {}
         options = {"server": self.config.base_url, "timeout": self.config.timeout_seconds}
         try:
             client = JIRA(options=options, token_auth=self.config.access_token.strip() or None)
@@ -41,30 +43,39 @@ class JiraCrawler:
             query = self._extract_jql(jira_filter.url)
             if not query:
                 continue
-            for issue in self._search_issues(client, query, jira_filter.name):
+            records, events = self._search_issues(client, query, jira_filter.name)
+            for issue in records:
                 issues[issue.issue_key] = issue
+            for event in events:
+                change_events[event.event_id] = event
 
         if self.config.jql:
-            for issue in self._search_issues(client, self.config.jql, "default"):
+            records, events = self._search_issues(client, self.config.jql, "default")
+            for issue in records:
                 issues[issue.issue_key] = issue
+            for event in events:
+                change_events[event.event_id] = event
 
-        return CrawlResult(snapshot_date=snapshot_date, issues=list(issues.values()))
+        return CrawlResult(snapshot_date=snapshot_date, issues=list(issues.values()), change_events=list(change_events.values()))
 
     def _extract_jql(self, url: str) -> str:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         return params.get("jql", [""])[0].strip()
 
-    def _search_issues(self, client, jql: str, source_filter: str) -> list[IssueRecord]:
+    def _search_issues(self, client, jql: str, source_filter: str) -> tuple[list[IssueRecord], list[IssueChangeEvent]]:
         try:
             result = client.search_issues(
                 jql_str=jql,
                 maxResults=self.config.max_results,
                 fields="summary,status,assignee,priority,updated,created,labels,components,description",
+                expand="changelog",
             )
         except Exception as exc:  # pragma: no cover
             raise CrawlerError(f"Failed to query Jira by JQL `{jql}`: {exc}") from exc
-        return [self._to_issue_record(item, source_filter) for item in result]
+        records = [self._to_issue_record(item, source_filter) for item in result]
+        events = [event for item in result for event in self._extract_change_events(item)]
+        return records, events
 
     def _to_issue_record(self, issue, source_filter: str) -> IssueRecord:
         fields = issue.fields
@@ -99,6 +110,50 @@ class JiraCrawler:
                         values.append(text)
             return "\n".join(values) or None
         return str(description)
+
+    def _extract_change_events(self, issue) -> list[IssueChangeEvent]:
+        changelog = getattr(issue, "changelog", None)
+        histories = getattr(changelog, "histories", None)
+        if not histories:
+            return []
+        events: list[IssueChangeEvent] = []
+        for history in histories:
+            history_id = str(getattr(history, "id", ""))
+            changed_at = getattr(history, "created", None) or ""
+            author = getattr(getattr(history, "author", None), "displayName", None)
+            for index, item in enumerate(getattr(history, "items", []) or []):
+                field = str(getattr(item, "field", "") or "")
+                from_value = getattr(item, "fromString", None)
+                to_value = getattr(item, "toString", None)
+                events.append(
+                    IssueChangeEvent(
+                        event_id=f"{issue.key}:{history_id}:{index}:{field}",
+                        issue_key=issue.key,
+                        changed_at=changed_at,
+                        author=author,
+                        field=field,
+                        from_value=from_value,
+                        to_value=to_value,
+                        change_type=self._change_type(field, from_value, to_value),
+                        issue_status_after=to_value if field.lower() == "status" else None,
+                        team_after=infer_team_from_issue_key(issue.key),
+                    )
+                )
+        return events
+
+    def _change_type(self, field: str, from_value: str | None, to_value: str | None) -> str:
+        field_lower = field.lower()
+        if field_lower == "status":
+            from_status = (from_value or "").lower()
+            to_status = (to_value or "").lower()
+            if to_status in {"done", "closed", "resolved"}:
+                return "closed"
+            if from_status in {"done", "closed", "resolved"} and to_status not in {"done", "closed", "resolved"}:
+                return "reopened"
+            return "status_changed"
+        if field_lower == "assignee":
+            return "assignee_changed"
+        return f"{field_lower}_changed"
 
 
 def derive_issue_deltas(current: Iterable[IssueRecord], previous: Iterable[IssueRecord]) -> list[IssueDelta]:

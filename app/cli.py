@@ -41,6 +41,7 @@ def crawl(config_path: str | None = None) -> None:
         previous = repo.load_snapshot(previous_date) if previous_date else []
         deltas = derive_issue_deltas(result.issues, previous)
         repo.save_daily_snapshot(result.snapshot_date, result.issues)
+        repo.save_change_events(result.change_events)
         repo.save_deltas(result.snapshot_date, deltas)
         repo.update_run(run_id, "success", f"Crawled {len(result.issues)} issues")
         print(f"Crawled {len(result.issues)} issues for {result.snapshot_date}")

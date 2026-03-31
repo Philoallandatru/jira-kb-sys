@@ -10,6 +10,7 @@ from typing import Iterator
 from app.models import (
     DailyAIAnalysis,
     DocChunk,
+    IssueChangeEvent,
     IssueAIAnalysis,
     IssueDelta,
     IssueRecord,
@@ -63,6 +64,14 @@ class Repository:
                     change_type TEXT NOT NULL,
                     details_json TEXT NOT NULL,
                     PRIMARY KEY (snapshot_date, issue_key, change_type)
+                );
+                CREATE TABLE IF NOT EXISTS issue_change_events (
+                    event_id TEXT PRIMARY KEY,
+                    issue_key TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    change_type TEXT NOT NULL,
+                    data_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS doc_chunks (
                     chunk_id TEXT PRIMARY KEY,
@@ -130,6 +139,26 @@ class Repository:
             ).fetchall()
         return [IssueRecord(**json.loads(row["data_json"])) for row in rows]
 
+    def load_current_issues(self) -> list[IssueRecord]:
+        with self.connect() as conn:
+            rows = conn.execute("SELECT data_json FROM issues_current ORDER BY issue_key").fetchall()
+        return [IssueRecord(**json.loads(row["data_json"])) for row in rows]
+
+    def load_issue(self, issue_key: str, snapshot_date: str | None = None) -> IssueRecord | None:
+        if snapshot_date:
+            with self.connect() as conn:
+                row = conn.execute(
+                    "SELECT data_json FROM issues_daily_snapshot WHERE snapshot_date = ? AND issue_key = ?",
+                    (snapshot_date, issue_key),
+                ).fetchone()
+        else:
+            with self.connect() as conn:
+                row = conn.execute(
+                    "SELECT data_json FROM issues_current WHERE issue_key = ?",
+                    (issue_key,),
+                ).fetchone()
+        return IssueRecord(**json.loads(row["data_json"])) if row else None
+
     def get_previous_snapshot_date(self, snapshot_date: str) -> str | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -155,6 +184,39 @@ class Repository:
                 (snapshot_date,),
             ).fetchall()
         return [IssueDelta(**json.loads(row["details_json"])) for row in rows]
+
+    def save_change_events(self, events: list[IssueChangeEvent]) -> None:
+        with self.connect() as conn:
+            for event in events:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO issue_change_events (
+                        event_id, issue_key, changed_at, field, change_type, data_json
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        event.issue_key,
+                        event.changed_at,
+                        event.field,
+                        event.change_type,
+                        json.dumps(event.to_dict(), ensure_ascii=False),
+                    ),
+                )
+            conn.commit()
+
+    def load_change_events_in_range(self, date_from: str, date_to: str) -> list[IssueChangeEvent]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT data_json
+                FROM issue_change_events
+                WHERE substr(changed_at, 1, 10) >= ? AND substr(changed_at, 1, 10) <= ?
+                ORDER BY changed_at, issue_key
+                """,
+                (date_from, date_to),
+            ).fetchall()
+        return [IssueChangeEvent(**json.loads(row["data_json"])) for row in rows]
 
     def load_deltas_in_range(self, date_from: str, date_to: str) -> list[IssueDelta]:
         with self.connect() as conn:
@@ -252,6 +314,13 @@ class Repository:
             row = conn.execute(
                 "SELECT DISTINCT snapshot_date FROM issues_daily_snapshot WHERE snapshot_date <= ? ORDER BY snapshot_date DESC LIMIT 1",
                 (snapshot_date,),
+            ).fetchone()
+        return row["snapshot_date"] if row else None
+
+    def latest_snapshot_date(self) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT DISTINCT snapshot_date FROM issues_daily_snapshot ORDER BY snapshot_date DESC LIMIT 1"
             ).fetchone()
         return row["snapshot_date"] if row else None
 

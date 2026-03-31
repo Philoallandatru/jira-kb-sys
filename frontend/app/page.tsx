@@ -18,8 +18,13 @@ const cards = [
   },
   {
     title: "Issues",
-    description: "后续接入 Jira 列表、单 Jira 详情、spec/policy 关联和深度分析。",
+    description: "查看 Jira 列表、单 Jira 详情、spec/policy 关联和深度分析。",
     href: "/issues",
+  },
+  {
+    title: "Prompt Settings",
+    description: "维护默认语言、输出长度和各场景 custom prompt。",
+    href: "/settings",
   },
 ];
 
@@ -29,8 +34,8 @@ export default function HomePage() {
       <section className="hero">
         <h1>Retro Modern Control Surface</h1>
         <p>
-          这个独立前端是下一阶段的正式入口。当前第一版先打通管理层摘要页面，并保留统一的复古现代视觉语言，
-          后续逐步接入 Dashboard、日报、Jira 明细、知识库问答和任务中心。
+          这个独立前端已经接入 Dashboard、日报、管理层摘要、Issue Detail 与 Prompt Settings。
+          当前仍在继续补充知识库问答、任务中心和更完整的 Jira 增量事件流。
         </p>
       </section>
 

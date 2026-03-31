@@ -36,28 +36,226 @@ export type ManagementSummaryResult = {
   referenced_metrics: Record<string, number | string>;
 };
 
-export async function createManagementSummaryTask(payload: ManagementSummaryRequest) {
-  const response = await fetch(`${API_BASE_URL}/tasks/reports/management-summary`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+export type DashboardOverview = {
+  snapshot_date: string;
+  metrics: {
+    total_issues: number;
+    new_issues: number;
+    closed_issues: number;
+    blocked_issues: number;
+    stale_issues: number;
+    status_counts: Record<string, number>;
+  };
+  project_summaries: {
+    project: string;
+    total: number;
+    open_count: number;
+    closed_count: number;
+    blocked_count: number;
+  }[];
+  priority_issues: {
+    issue_key: string;
+    summary: string;
+    status: string;
+    assignee: string | null;
+    priority: string | null;
+    change_summary: string;
+  }[];
+  daily_analysis: {
+    overall_health: string;
+    top_risks: string[];
+    suspected_root_causes: string[];
+    recommended_actions: string[];
+    watch_items: string[];
+  } | null;
+};
+
+export type DailyReportListItem = {
+  report_date: string;
+  issue_count: number;
+  blocked_count: number;
+  high_priority_open_count: number;
+  overall_health: string | null;
+};
+
+export type DailyReportDetail = {
+  report: {
+    report_date: string;
+    generated_at: string;
+    run_id: number | null;
+    metrics: DashboardOverview["metrics"];
+    project_summaries: DashboardOverview["project_summaries"];
+    priority_issues: DashboardOverview["priority_issues"];
+  };
+  daily_analysis: DashboardOverview["daily_analysis"];
+  issue_analyses: {
+    issue_key: string;
+    summary: string;
+    suspected_root_cause: string;
+    evidence: string[];
+    action_needed: string[];
+    confidence: string;
+  }[];
+};
+
+export type IssueItem = {
+  issue_key: string;
+  summary: string;
+  status: string;
+  team: string | null;
+  assignee: string | null;
+  priority: string | null;
+  project: string | null;
+  labels: string[];
+  components: string[];
+  description: string | null;
+  comments: string[];
+  links: string[];
+  updated_at: string | null;
+  created_at: string | null;
+  source_filter: string | null;
+};
+
+export type IssueDetailResponse = {
+  snapshot_date: string;
+  issue: IssueItem;
+  issue_analysis: {
+    issue_key: string;
+    summary: string;
+    suspected_root_cause: string;
+    evidence: string[];
+    action_needed: string[];
+    confidence: string;
+  } | null;
+  deltas: {
+    issue_key: string;
+    change_type: string;
+    details: string;
+  }[];
+};
+
+export type IssueDeepAnalysisResponse = {
+  snapshot_date: string;
+  result: {
+    issue_key: string;
+    generated_at: string;
+    issue_summary: string;
+    spec_relations: string[];
+    policy_relations: string[];
+    related_jira_designs: string[];
+    suspected_problems: string[];
+    next_actions: string[];
+    open_questions: string[];
+    confidence: string;
+    citations: {
+      source_type: string;
+      source_path: string;
+      section_path: string[];
+      summary: string;
+    }[];
+  };
+};
+
+export type PromptSettings = {
+  default_language: string;
+  max_output_tokens: number;
+  scenario_max_output_tokens: Record<string, number>;
+  custom_prompts: Record<string, string>;
+};
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
     cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
   });
   if (!response.ok) {
-    throw new Error(`创建任务失败: ${response.status}`);
+    throw new Error(`请求失败: ${response.status}`);
   }
-  return (await response.json()) as { id: number; status: string };
+  return (await response.json()) as T;
+}
+
+export async function createManagementSummaryTask(payload: ManagementSummaryRequest) {
+  return apiFetch<{ id: number; status: string }>("/tasks/reports/management-summary", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getManagementSummary(taskId: number) {
-  const response = await fetch(`${API_BASE_URL}/reports/management-summary/${taskId}`, {
-    method: "GET",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    throw new Error(`查询任务失败: ${response.status}`);
-  }
-  return (await response.json()) as
+  return apiFetch<
     | { id: number; status: string; details?: string; result?: never }
-    | { id: number; status: string; result: ManagementSummaryResult };
+    | { id: number; status: string; result: ManagementSummaryResult }
+  >(`/reports/management-summary/${taskId}`);
+}
+
+export async function getDashboardOverview(params: {
+  report_date?: string;
+  team?: string | null;
+  jira_status?: string[];
+}) {
+  const query = new URLSearchParams();
+  if (params.report_date) query.set("report_date", params.report_date);
+  if (params.team) query.set("team", params.team);
+  for (const status of params.jira_status ?? []) {
+    query.append("jira_status", status);
+  }
+  return apiFetch<DashboardOverview>(`/dashboard/overview?${query.toString()}`);
+}
+
+export async function listDailyReports(limit = 14) {
+  return apiFetch<{ items: DailyReportListItem[] }>(`/reports/daily?limit=${limit}`);
+}
+
+export async function getDailyReport(reportDate: string, team?: string | null, jiraStatus?: string[]) {
+  const query = new URLSearchParams();
+  if (team) query.set("team", team);
+  for (const status of jiraStatus ?? []) {
+    query.append("jira_status", status);
+  }
+  return apiFetch<DailyReportDetail>(`/reports/daily/${reportDate}?${query.toString()}`);
+}
+
+export async function listIssues(params: {
+  report_date?: string;
+  team?: string | null;
+  jira_status?: string[];
+  query?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params.report_date) query.set("report_date", params.report_date);
+  if (params.team) query.set("team", params.team);
+  if (params.query) query.set("query", params.query);
+  for (const status of params.jira_status ?? []) {
+    query.append("jira_status", status);
+  }
+  return apiFetch<{ snapshot_date: string; items: IssueItem[] }>(`/issues?${query.toString()}`);
+}
+
+export async function getIssueDetail(issueKey: string, reportDate?: string) {
+  const query = new URLSearchParams();
+  if (reportDate) query.set("report_date", reportDate);
+  return apiFetch<IssueDetailResponse>(`/issues/${encodeURIComponent(issueKey)}?${query.toString()}`);
+}
+
+export async function getIssueDeepAnalysis(issueKey: string, reportDate?: string) {
+  const query = new URLSearchParams();
+  if (reportDate) query.set("report_date", reportDate);
+  return apiFetch<IssueDeepAnalysisResponse>(
+    `/issues/${encodeURIComponent(issueKey)}/deep-analysis?${query.toString()}`
+  );
+}
+
+export async function getPromptSettings() {
+  return apiFetch<PromptSettings>("/settings/prompts");
+}
+
+export async function updatePromptSettings(payload: PromptSettings) {
+  return apiFetch<PromptSettings>("/settings/prompts", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }

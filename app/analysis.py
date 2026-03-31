@@ -17,6 +17,7 @@ class LLMClient:
         self.config = config
 
     def chat_json(self, prompt: str, schema_hint: str, scenario: str = "docs_qa", max_output_tokens: int | None = None) -> dict[str, Any]:
+        scenario_max_tokens = self.config.llm.scenario_max_output_tokens.get(scenario)
         response = requests.post(
             self.config.llm.base_url.rstrip("/") + "/chat/completions",
             headers={
@@ -33,7 +34,7 @@ class LLMClient:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                "max_tokens": max_output_tokens or self.config.llm.max_output_tokens,
+                "max_tokens": max_output_tokens or scenario_max_tokens or self.config.llm.max_output_tokens,
                 "response_format": {"type": "json_object"},
             },
             timeout=self.config.llm.timeout_seconds,

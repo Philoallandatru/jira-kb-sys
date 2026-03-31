@@ -52,6 +52,23 @@ class IssueDelta:
 
 
 @dataclass
+class IssueChangeEvent:
+    event_id: str
+    issue_key: str
+    changed_at: str
+    author: str | None
+    field: str
+    from_value: str | None
+    to_value: str | None
+    change_type: str
+    issue_status_after: str | None = None
+    team_after: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class MarkdownDocument:
     document_id: str
     source_path: str
@@ -175,6 +192,49 @@ class IssueAIAnalysis:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class DeepAnalysisCitation:
+    source_type: str
+    source_path: str
+    section_path: list[str]
+    summary: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class IssueDeepAnalysisResult:
+    issue_key: str
+    generated_at: str
+    issue_summary: str
+    spec_relations: list[str]
+    policy_relations: list[str]
+    related_jira_designs: list[str]
+    suspected_problems: list[str]
+    next_actions: list[str]
+    open_questions: list[str]
+    confidence: str
+    citations: list[DeepAnalysisCitation]
+    raw_response: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "issue_key": self.issue_key,
+            "generated_at": self.generated_at,
+            "issue_summary": self.issue_summary,
+            "spec_relations": self.spec_relations,
+            "policy_relations": self.policy_relations,
+            "related_jira_designs": self.related_jira_designs,
+            "suspected_problems": self.suspected_problems,
+            "next_actions": self.next_actions,
+            "open_questions": self.open_questions,
+            "confidence": self.confidence,
+            "citations": [item.to_dict() for item in self.citations],
+            "raw_response": self.raw_response,
+        }
 
 
 @dataclass

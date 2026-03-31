@@ -162,6 +162,12 @@ select {
   gap: 20px;
 }
 
+.issues-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 20px;
+}
+
 .panel {
   padding: 20px;
 }
@@ -179,12 +185,18 @@ select {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255, 251, 245, 0.92);
   padding: 10px 12px;
   color: var(--ink);
+}
+
+.field textarea {
+  min-height: 160px;
+  resize: vertical;
 }
 
 .primary-button {
@@ -264,6 +276,52 @@ select {
   background: rgba(255, 250, 242, 0.52);
 }
 
+.table-list,
+.stack-list,
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.table-row,
+.list-button {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 252, 247, 0.82);
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 1.4fr repeat(4, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.list-button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-button.active {
+  border-color: rgba(127, 52, 29, 0.4);
+  background: rgba(163, 78, 45, 0.1);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.prompt-editor {
+  min-height: 180px;
+}
+
 pre {
   white-space: pre-wrap;
   word-break: break-word;
@@ -271,11 +329,16 @@ pre {
 }
 
 @media (max-width: 980px) {
-  .management-layout {
+  .management-layout,
+  .issues-layout {
     grid-template-columns: 1fr;
   }
 
   .app-shell {
     padding: 18px;
+  }
+
+  .table-row {
+    grid-template-columns: 1fr;
   }
 }

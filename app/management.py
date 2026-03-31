@@ -10,7 +10,7 @@ from requests import RequestException
 
 from app.analysis import LLMClient
 from app.config import AppConfig
-from app.models import IssueAIAnalysis, IssueDelta, IssueRecord, ManagementSummaryMetrics, ManagementSummaryRequest, ManagementSummaryResult, utc_now_iso
+from app.models import IssueAIAnalysis, IssueChangeEvent, IssueDelta, IssueRecord, ManagementSummaryMetrics, ManagementSummaryRequest, ManagementSummaryResult, utc_now_iso
 from app.repository import Repository
 
 
@@ -24,7 +24,8 @@ def build_management_summary(
     if not snapshot_date:
         raise RuntimeError(f"No snapshot data found on or before {request.date_to}")
     issues = repo.load_snapshot(snapshot_date)
-    deltas = repo.load_deltas_in_range(request.date_from, request.date_to)
+    change_events = repo.load_change_events_in_range(request.date_from, request.date_to)
+    deltas = _events_to_deltas(change_events) or repo.load_deltas_in_range(request.date_from, request.date_to)
     recent_issues = _select_recent_issues(issues, deltas, request)
     issue_keys = [item.issue_key for item in recent_issues]
     metrics = _build_metrics(recent_issues, deltas)
@@ -38,6 +39,7 @@ def build_management_summary(
                     "metrics": metrics.to_dict(),
                     "recent_issues": [issue.to_dict() for issue in recent_issues[:20]],
                     "recent_deltas": [delta.to_dict() for delta in deltas if delta.issue_key in set(issue_keys)][:50],
+                    "recent_change_events": [event.to_dict() for event in change_events if event.issue_key in set(issue_keys)][:50],
                     "issue_analyses": {key: value.to_dict() for key, value in issue_analyses.items() if key in set(issue_keys)},
                 },
                 ensure_ascii=False,
@@ -190,6 +192,25 @@ def _build_metrics(issues: list[IssueRecord], deltas: list[IssueDelta]) -> Manag
         issues_without_root_cause=issues_without_root_cause,
         referenced_issue_keys=referenced_issue_keys,
     )
+
+
+def _events_to_deltas(events: list[IssueChangeEvent]) -> list[IssueDelta]:
+    deltas: list[IssueDelta] = []
+    for event in events:
+        if event.change_type not in {"status_changed", "closed", "reopened", "assignee_changed"}:
+            continue
+        deltas.append(
+            IssueDelta(
+                issue_key=event.issue_key,
+                change_type=event.change_type,
+                previous_status=event.from_value if event.field.lower() == "status" else None,
+                current_status=event.to_value if event.field.lower() == "status" else None,
+                previous_assignee=event.from_value if event.field.lower() == "assignee" else None,
+                current_assignee=event.to_value if event.field.lower() == "assignee" else None,
+                details=f"{event.field} changed from {event.from_value or '-'} to {event.to_value or '-'}",
+            )
+        )
+    return deltas
 
 
 def _fallback_management_summary(

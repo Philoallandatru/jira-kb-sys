@@ -1,72 +1,79 @@
 # Jira KB 系统
 
-一个面向 SSD/NVMe 场景的 Jira 汇总、文档知识库检索和本地 AI 分析系统。
+面向 SSD/NVMe 场景的 Jira 汇总、知识库检索与本地 AI 分析系统。
 
-当前系统已经具备这些能力：
+当前仓库已经具备这些能力：
 
-- 通过 `base_url + access_token` 使用 `jira` Python 客户端访问 Jira
-- 抓取 Jira 快照并生成变更摘要
+- 通过 `base_url + access_token` 访问 Jira
+- 保存 Jira 每日快照，并补充真实 changelog 事件存储
 - 将本地 `PDF / PPTX / XLSX / DOCX` 转成 Markdown 并建立知识库
-- 生成日报、管理层摘要、问答结果和 AI 分析结果
-- 使用本地 OpenAI-compatible 模型服务进行结构化分析
-- 提供 Streamlit 运维台界面
-- 提供 FastAPI 管理层摘要接口，作为独立前端的后端起点
+- 生成日报、管理层摘要、文档问答、Jira + 文档联合问答
+- 提供单 Jira 深度分析
+- 提供 Streamlit 运维台
+- 提供 FastAPI 后端
+- 提供独立前端 `frontend/`，采用复古现代风格
 
 ## 当前产品能力
 
-### Jira 数据能力
+### 1. Jira 数据
 
-- 通过 `jira.base_url`
-- 通过 `jira.access_token`
-- 通过 `project_filters` 中的 URL 自动提取 `jql`
-- 支持团队识别：
-  - `issue_key` 以 `[SV]` 开头时识别为 `SV`
-  - `issue_key` 以 `[DV]` 开头时识别为 `DV`
+- 保存每日快照到 SQLite
+- 保存快照差分事件 `issue_events_derived`
+- 保存 Jira changelog 事件 `issue_change_events`
+- 支持根据 issue key 前缀推断团队：
+  - `[SV]` -> `SV`
+  - `[DV]` -> `DV`
 
-### 文档知识库能力
+### 2. AI 分析
 
-- 本地文档导入到 `data/raw_docs/`
-- 转换后的 Markdown 存到 `data/markdown/`
-- 切块结果存到 `data/chunks/`
-- 支持本地 BM25 检索
-- 支持 PDF 的 `pdftotext` 兜底
-
-### AI 分析能力
-
-- 日报级 AI 分析
-- 单 issue 级 AI 分析
-- 管理层摘要
+- 日报 AI 分析
+- 管理层摘要 `management_summary`
+- 单 Jira 深度分析
 - 文档问答
 - Jira + 文档联合问答
 
-### 前端与接口
+### 3. 独立前端
 
-- Streamlit 运维台
-- FastAPI 管理层摘要接口
-- 当前已经可以开始做独立前端
+已接通页面：
 
-## 为什么现在可以开始做独立前端
+- `/`
+- `/dashboard`
+- `/reports`
+- `/management-summary`
+- `/issues`
+- `/settings`
 
-可以开始，原因很明确：
+### 4. Prompt 与输出配置
 
-- 后端核心数据层已经存在：SQLite、snapshot、delta、AI 结果都已落库
-- 管理层摘要已经有独立的数据模型和导出逻辑
-- 已经有 FastAPI API 起点，不需要从零起后端服务
-- Prompt 配置、管理层摘要、知识库、问答已经从 UI 层分离到服务层
+支持：
 
-当前最合理的独立前端切入方式是：
+- 默认输出语言 `zh-CN`
+- 全局 `max_output_tokens`
+- 场景级 `scenario_max_output_tokens`
+- 场景级 `custom_prompts`
 
-- 后端继续用 `FastAPI`
-- 新前端用 `React / Next.js`
-- Streamlit 保留为内部运维台，不再作为主产品入口
+相关场景：
 
-这意味着现在开始独立前端是低风险的，不需要先推倒当前系统。
+- `daily_report`
+- `issue_deep_analysis`
+- `docs_qa`
+- `jira_docs_qa`
+- `management_summary`
 
-当前独立前端骨架已经创建在 `frontend/`。
+## 主要目录
+
+- [app](/E:/Code/AI/codex/pr-agent/jira-summary/app)
+  Python 后端、CLI、服务层、Streamlit UI
+- [frontend](/E:/Code/AI/codex/pr-agent/jira-summary/frontend)
+  Next.js 独立前端
+- [docs](/E:/Code/AI/codex/pr-agent/jira-summary/docs)
+  中文架构、运行与差距说明
+- [tests](/E:/Code/AI/codex/pr-agent/jira-summary/tests)
+  回归测试
 
 ## 配置示例
 
-`config.yaml`:
+`config.yaml`：
 
 ```yaml
 jira:
@@ -75,9 +82,6 @@ jira:
   project_filters:
     - name: "default"
       url: "https://jira.example.com/issues/?jql=project%20%3D%20SSD"
-  jql: ""
-  max_results: 200
-  timeout_seconds: 45
 
 llm:
   base_url: "http://localhost:8000/v1"
@@ -87,6 +91,12 @@ llm:
   default_language: "zh-CN"
   max_output_tokens: 4096
   custom_prompts: {}
+  scenario_max_output_tokens:
+    daily_report: 4096
+    issue_deep_analysis: 6144
+    docs_qa: 4096
+    jira_docs_qa: 6144
+    management_summary: 6144
 ```
 
 ## 常用命令
@@ -95,15 +105,15 @@ llm:
 $env:PYTHONPATH='.'
 python -m app.cli crawl
 python -m app.cli build-docs
-python -m app.cli report --date 2026-03-31
 python -m app.cli analyze --date 2026-03-31
+python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
 python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
-streamlit run app/ui.py
 uvicorn app.api:app --reload
+streamlit run app/ui.py
 ```
 
-独立前端运行：
+独立前端：
 
 ```powershell
 cd frontend
@@ -118,48 +128,32 @@ $env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
 npm run dev
 ```
 
-## Streamlit 运维台页面
+## FastAPI 接口
 
-- `Dashboard`
-- `Daily Reports`
-- `Management Summary`
-- `Issue Explorer`
-- `Knowledge Hits`
-- `Ask Docs`
-- `Ask Jira + Docs`
-- `Manage Knowledge`
+当前已提供：
 
-## FastAPI 已提供的接口
-
+- `GET /health`
+- `GET /dashboard/overview`
+- `GET /reports/daily`
+- `GET /reports/daily/{report_date}`
 - `POST /tasks/reports/management-summary`
-- `GET /reports/management-summary/{id}`
+- `GET /reports/management-summary/{run_id}`
+- `GET /issues`
+- `GET /issues/{issue_key}`
+- `GET /issues/{issue_key}/deep-analysis`
+- `POST /qa/docs`
+- `POST /qa/jira-docs`
+- `GET /settings/prompts`
+- `PUT /settings/prompts`
 
-这两条接口已经足够作为独立前端第一批页面的后端基础。
+## 已知边界
 
-## 当前独立前端已包含的页面
+当前仍未完全完成的项见：
 
-- `/`
-  - 首页与导航
-- `/management-summary`
-  - 管理层摘要任务提交与结果轮询
-- `/dashboard`
-  - 占位页
-- `/reports`
-  - 占位页
-- `/issues`
-  - 占位页
+- [docs/GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md)
 
-## 当前建议的下一步
+其中最大的剩余项是：
 
-最值得做的是直接开始独立前端一期：
-
-1. 先搭 `FastAPI + Next.js` 的骨架
-2. 先接管理层摘要页面
-3. 再接 Dashboard、日报、Jira 列表、单 Jira 详情
-4. 最后把问答和知识库管理迁过去
-
-## 注意事项
-
-- 如果本地 OpenAI-compatible 服务不可用，系统会自动退回 fallback 分析
-- `WeasyPrint` 不可用时，仍然会生成 HTML 和 Markdown
-- 当前检索仍以 BM25 为主，后续可以再升级混合检索
+- Jira 全量/增量同步命令与 Web 任务中心还不完整
+- Docs QA 与 Jira + Docs QA 还没有独立前端页面
+- 前端还没有通用异步任务中心

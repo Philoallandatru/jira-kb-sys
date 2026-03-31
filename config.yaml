@@ -29,6 +29,12 @@ llm:
   default_language: "zh-CN"
   max_output_tokens: 4096
   custom_prompts: {}
+  scenario_max_output_tokens:
+    daily_report: 4096
+    issue_deep_analysis: 6144
+    docs_qa: 4096
+    jira_docs_qa: 6144
+    management_summary: 6144
 
 reporting:
   stale_days: 7

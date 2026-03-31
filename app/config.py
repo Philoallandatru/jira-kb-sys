@@ -45,6 +45,7 @@ class LLMConfig(BaseModel):
     default_language: str = "zh-CN"
     max_output_tokens: int = 4096
     custom_prompts: dict[str, str] = Field(default_factory=dict)
+    scenario_max_output_tokens: dict[str, int] = Field(default_factory=dict)
 
 
 class ReportingConfig(BaseModel):
