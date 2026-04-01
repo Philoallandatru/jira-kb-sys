@@ -23,6 +23,8 @@ export type TaskRun = {
   details: string | null;
   details_json: unknown;
   created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 export type ManagementSummaryResult = {

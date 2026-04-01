@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import date
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import yaml
@@ -19,7 +22,22 @@ from app.qa import answer_jira_docs_question, answer_question
 from app.reporting import build_daily_report, render_markdown, write_report_files
 
 
-app = FastAPI(title="Jira Summary API", version="0.4.0")
+TASK_POLL_INTERVAL_SECONDS = 1.0
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    stop_event = threading.Event()
+    worker = threading.Thread(target=_task_worker_loop, args=(stop_event,), name="jira-summary-worker", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        worker.join(timeout=5)
+
+
+app = FastAPI(title="Jira Summary API", version="0.5.0", lifespan=lifespan)
 
 
 class ManagementSummaryTaskRequest(BaseModel):
@@ -193,6 +211,39 @@ def _run_daily_report(run_id: int, request: DailyTaskRequest) -> None:
         repo.update_run(run_id, "failed", str(exc))
 
 
+def _task_worker_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            config, repo = _bootstrap(None)
+            row = repo.claim_next_queued_run()
+            if not row:
+                stop_event.wait(TASK_POLL_INTERVAL_SECONDS)
+                continue
+            _execute_queued_run(int(row["id"]), str(row["run_type"]), row.get("payload_json"))
+        except Exception:
+            stop_event.wait(TASK_POLL_INTERVAL_SECONDS)
+
+
+def _execute_queued_run(run_id: int, run_type: str, payload_json: str | None) -> None:
+    task_map = {
+        "management-summary": (ManagementSummaryTaskRequest, _run_management_summary),
+        "incremental-sync": (SyncTaskRequest, _run_incremental_sync),
+        "full-sync": (SyncTaskRequest, _run_full_sync),
+        "crawl": (SimpleTaskRequest, _run_crawl),
+        "build-docs": (SimpleTaskRequest, _run_build_docs),
+        "analyze": (DailyTaskRequest, _run_analyze),
+        "report": (DailyTaskRequest, _run_daily_report),
+    }
+    model_and_handler = task_map.get(run_type)
+    if not model_and_handler:
+        _, repo = _bootstrap(None)
+        repo.update_run(run_id, "failed", f"Unknown task type: {run_type}")
+        return
+    model_cls, handler = model_and_handler
+    payload = model_cls.model_validate(json.loads(payload_json) if payload_json else {})
+    handler(run_id, payload)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -204,8 +255,7 @@ def create_management_summary_task(
     background_tasks: BackgroundTasks,
 ) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
-    run_id = repo.create_run("management-summary", payload.date_to, "queued")
-    background_tasks.add_task(_run_management_summary, run_id, payload)
+    run_id = repo.create_run("management-summary", payload.date_to, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -216,8 +266,7 @@ def create_incremental_sync_task(
 ) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     snapshot_date = payload.snapshot_date or date.today().isoformat()
-    run_id = repo.create_run("incremental-sync", snapshot_date, "queued")
-    background_tasks.add_task(_run_incremental_sync, run_id, payload)
+    run_id = repo.create_run("incremental-sync", snapshot_date, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -228,8 +277,7 @@ def create_full_sync_task(
 ) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     run_label = payload.snapshot_date or f"{payload.date_from or date.today().isoformat()}..{payload.date_to or payload.date_from or date.today().isoformat()}"
-    run_id = repo.create_run("full-sync", run_label, "queued")
-    background_tasks.add_task(_run_full_sync, run_id, payload)
+    run_id = repo.create_run("full-sync", run_label, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -237,16 +285,14 @@ def create_full_sync_task(
 def create_crawl_task(payload: SimpleTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     snapshot_date = date.today().isoformat()
-    run_id = repo.create_run("crawl", snapshot_date, "queued")
-    background_tasks.add_task(_run_crawl, run_id, payload)
+    run_id = repo.create_run("crawl", snapshot_date, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
 @app.post("/tasks/build-docs")
 def create_build_docs_task(payload: SimpleTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
-    run_id = repo.create_run("build-docs", date.today().isoformat(), "queued")
-    background_tasks.add_task(_run_build_docs, run_id, payload)
+    run_id = repo.create_run("build-docs", date.today().isoformat(), "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -254,8 +300,7 @@ def create_build_docs_task(payload: SimpleTaskRequest, background_tasks: Backgro
 def create_analyze_task(payload: DailyTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     report_date = payload.report_date or date.today().isoformat()
-    run_id = repo.create_run("analyze", report_date, "queued")
-    background_tasks.add_task(_run_analyze, run_id, payload)
+    run_id = repo.create_run("analyze", report_date, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -263,8 +308,7 @@ def create_analyze_task(payload: DailyTaskRequest, background_tasks: BackgroundT
 def create_report_task(payload: DailyTaskRequest, background_tasks: BackgroundTasks) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     report_date = payload.report_date or date.today().isoformat()
-    run_id = repo.create_run("report", report_date, "queued")
-    background_tasks.add_task(_run_daily_report, run_id, payload)
+    run_id = repo.create_run("report", report_date, "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
@@ -525,4 +569,6 @@ def _serialize_run(row: dict) -> dict:
         "details": details,
         "details_json": parsed_details,
         "created_at": row["created_at"],
+        "started_at": row.get("started_at"),
+        "finished_at": row.get("finished_at"),
     }

@@ -45,6 +45,9 @@ class Repository:
                     run_date TEXT NOT NULL,
                     status TEXT NOT NULL,
                     details TEXT,
+                    payload_json TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS issues_current (
@@ -101,27 +104,88 @@ class Repository:
                 );
                 """
             )
+            self._ensure_column(conn, "runs", "payload_json", "TEXT")
+            self._ensure_column(conn, "runs", "started_at", "TEXT")
+            self._ensure_column(conn, "runs", "finished_at", "TEXT")
             conn.commit()
 
-    def create_run(self, run_type: str, run_date: str, status: str, details: str = "") -> int:
+    def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        existing = {row["name"] for row in rows}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def create_run(
+        self,
+        run_type: str,
+        run_date: str,
+        status: str,
+        details: str = "",
+        payload: dict | None = None,
+    ) -> int:
         with self.connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO runs (run_type, run_date, status, details) VALUES (?, ?, ?, ?)",
-                (run_type, run_date, status, details),
+                "INSERT INTO runs (run_type, run_date, status, details, payload_json) VALUES (?, ?, ?, ?, ?)",
+                (run_type, run_date, status, details, json.dumps(payload, ensure_ascii=False) if payload is not None else None),
             )
             conn.commit()
             return int(cursor.lastrowid)
 
     def update_run(self, run_id: int, status: str, details: str = "") -> None:
         with self.connect() as conn:
-            conn.execute("UPDATE runs SET status = ?, details = ? WHERE id = ?", (status, details, run_id))
+            if status == "running":
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = ?, details = ?, started_at = COALESCE(started_at, CURRENT_TIMESTAMP), finished_at = NULL
+                    WHERE id = ?
+                    """,
+                    (status, details, run_id),
+                )
+            elif status in {"success", "failed", "cancelled"}:
+                conn.execute(
+                    "UPDATE runs SET status = ?, details = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (status, details, run_id),
+                )
+            else:
+                conn.execute("UPDATE runs SET status = ?, details = ? WHERE id = ?", (status, details, run_id))
             conn.commit()
+
+    def claim_next_queued_run(self) -> dict[str, str | int | None] | None:
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
+                FROM runs
+                WHERE status = 'queued'
+                ORDER BY id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return None
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP), finished_at = NULL
+                WHERE id = ? AND status = 'queued'
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+        claimed = dict(row)
+        claimed["status"] = "running"
+        if claimed.get("started_at") is None:
+            claimed["started_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+        return claimed
 
     def list_runs(self, limit: int = 50) -> list[dict[str, str | int | None]]:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, run_type, run_date, status, details, created_at
+                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
                 FROM runs
                 ORDER BY id DESC
                 LIMIT ?
@@ -134,7 +198,7 @@ class Repository:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, run_type, run_date, status, details, created_at
+                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
                 FROM runs
                 WHERE id = ?
                 """,
