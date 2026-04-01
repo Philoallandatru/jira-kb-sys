@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 
 from app.analysis import analyze_daily_report
@@ -39,6 +40,14 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Jira Summary API", version="0.5.0", lifespan=lifespan)
+_app_config, _ = _bootstrap(None)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_app_config.server.cors_allow_origins,
+    allow_credentials=_app_config.server.cors_allow_credentials,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ManagementSummaryTaskRequest(BaseModel):

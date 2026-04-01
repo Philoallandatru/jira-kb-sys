@@ -17,6 +17,30 @@
 
 ## 环境变量
 
+后端本地跨域设置来自 `config.yaml`：
+
+```yaml
+server:
+  cors_allow_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+  cors_allow_credentials: true
+```
+
+如果你的前端不是从这两个地址打开，需要把实际前端地址加进去，再重启后端。
+
+后端跨域设置放在 `config.yaml`：
+
+```yaml
+server:
+  cors_allow_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+  cors_allow_credentials: true
+```
+
+如果前端不在这两个地址，需要把实际前端 origin 加进去，然后重启后端。
+
 ### Windows PowerShell
 
 当前会话：
@@ -235,6 +259,8 @@ export PYTHONPATH=.
 - `GET /integrations/jira/health` 是否可访问
 
 如果浏览器里看到 `//%3A/tasks/...` 这类 URL，说明前端 API base URL 配错了。
+如果浏览器里看到 `OPTIONS /tasks/... 405`，说明 CORS 预检没有通过，通常是后端没有重启到带 CORS 中间件的新版本，或者 `server.cors_allow_origins` 没包含当前前端地址。
+如果浏览器里看到 `OPTIONS /tasks/... 405`，说明后端还没启用最新 CORS 配置，或者修改后没有重启。
 
 ### 4. 单 Jira 深度分析为空
 

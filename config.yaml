@@ -41,3 +41,9 @@ reporting:
   risk_keywords: ["blocker", "reopen", "panic", "timeout", "data loss", "critical", "stuck"]
   top_issue_limit: 20
   team_filter: null
+
+server:
+  cors_allow_origins:
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+  cors_allow_credentials: true

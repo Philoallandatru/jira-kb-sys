@@ -76,6 +76,11 @@ Jira knowledge 的 source type：
 - `PYTHONPATH`
 - `NEXT_PUBLIC_API_BASE_URL`
 
+后端本地跨域设置来自 `config.yaml` 里的：
+
+- `server.cors_allow_origins`
+- `server.cors_allow_credentials`
+
 ### Windows PowerShell
 
 只对当前终端会话生效：
@@ -239,6 +244,7 @@ llm:
 4. 任务页里的 `Check Jira Connection` 是否能正常返回结果。
 
 如果浏览器里看到类似 `//%3A/tasks/...` 这种 URL，通常是 `NEXT_PUBLIC_API_BASE_URL` 配错了。
+如果浏览器里看到 `OPTIONS /tasks/... 405` 或 `Network Error when attempting to fetch resource`，通常是后端 CORS 未生效，或者后端没有重启到最新版本。
 
 ## 仍然存在的边界
 

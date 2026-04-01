@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import api
 
@@ -13,6 +14,10 @@ def test_api_exposes_sync_and_jira_health_routes():
     assert ("/tasks/sync/full", ("POST",)) in routes
     assert ("/tasks/sync/incremental", ("POST",)) in routes
     assert ("/integrations/jira/health", ("GET",)) in routes
+
+
+def test_api_enables_cors_middleware():
+    assert any(middleware.cls is CORSMiddleware for middleware in api.app.user_middleware)
 
 
 def test_get_jira_connection_health_success(monkeypatch):

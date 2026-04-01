@@ -55,12 +55,23 @@ class ReportingConfig(BaseModel):
     team_filter: str | None = None
 
 
+class ServerConfig(BaseModel):
+    cors_allow_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    )
+    cors_allow_credentials: bool = True
+
+
 class AppConfig(BaseModel):
     jira: JiraConfig
     docs: DocsConfig
     storage: StorageConfig
     llm: LLMConfig
     reporting: ReportingConfig
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
 
 class EnvSettings(BaseSettings):
@@ -71,6 +82,7 @@ class EnvSettings(BaseSettings):
     storage: dict[str, Any] = Field(default_factory=dict)
     llm: dict[str, Any] = Field(default_factory=dict)
     reporting: dict[str, Any] = Field(default_factory=dict)
+    server: dict[str, Any] = Field(default_factory=dict)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -95,6 +107,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
             "storage": env.storage,
             "llm": env.llm,
             "reporting": env.reporting,
+            "server": env.server,
         },
     )
     config = AppConfig.model_validate(merged)
