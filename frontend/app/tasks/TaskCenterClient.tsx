@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  checkJiraConnection,
   createAnalyzeTask,
   createBuildDocsTask,
   createCrawlTask,
@@ -31,6 +32,7 @@ export function TaskCenterClient() {
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [actionState, setActionState] = useState("Ready");
+  const [jiraState, setJiraState] = useState("Not checked");
   const [error, setError] = useState<string | null>(null);
 
   async function refreshRuns(preferredRunId?: number) {
@@ -103,6 +105,23 @@ export function TaskCenterClient() {
     }
   }
 
+  async function probeJiraConnection() {
+    setError(null);
+    setJiraState("Checking Jira connectivity...");
+    try {
+      const result = await checkJiraConnection();
+      setJiraState(
+        `Connected to ${result.base_url}${result.server_title ? ` | ${result.server_title}` : ""}${
+          result.authenticated_user ? ` | ${result.authenticated_user}` : ""
+        }`,
+      );
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Failed to connect to Jira";
+      setError(message);
+      setJiraState("Jira connection failed");
+    }
+  }
+
   return (
     <div className="qa-layout">
       <aside className="panel">
@@ -111,6 +130,7 @@ export function TaskCenterClient() {
 
         <div className="summary-section">
           <h3>Sync Tasks</h3>
+          <div className="status-line">{jiraState}</div>
           <div className="field">
             <label htmlFor="task-sync-date">Snapshot Date</label>
             <input
@@ -121,6 +141,9 @@ export function TaskCenterClient() {
             />
           </div>
           <div className="settings-stack">
+            <button className="secondary-button" type="button" onClick={probeJiraConnection}>
+              Check Jira Connection
+            </button>
             <button
               className="primary-button"
               type="button"

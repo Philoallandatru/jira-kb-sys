@@ -232,8 +232,20 @@ export type JiraDocsQAResponse = {
   raw_response: string;
 };
 
+export type JiraConnectionStatus = {
+  ok: boolean;
+  base_url: string;
+  server_title?: string | null;
+  version?: string | null;
+  deployment_type?: string | null;
+  authenticated_user?: string | null;
+  project_filter_count: number;
+  has_jql: boolean;
+};
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const url = `${API_BASE_URL}${path}`;
+  const response = await fetch(url, {
     ...init,
     cache: "no-store",
     headers: {
@@ -242,7 +254,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const body = await response.text();
+    throw new Error(`Request failed: ${response.status} ${response.statusText} for ${url}${body ? ` | ${body}` : ""}`);
   }
   return (await response.json()) as T;
 }
@@ -302,6 +315,10 @@ export async function listTasks(limit = 50) {
 
 export async function getTask(runId: number) {
   return apiFetch<TaskRun>(`/tasks/${runId}`);
+}
+
+export async function checkJiraConnection() {
+  return apiFetch<JiraConnectionStatus>("/integrations/jira/health");
 }
 
 export async function getManagementSummary(taskId: number) {

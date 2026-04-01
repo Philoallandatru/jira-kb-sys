@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.analysis import analyze_daily_report
 from app.cli import _bootstrap
+from app.crawler import CrawlerError, JiraCrawler
 from app.docs import BM25Index, DocumentConverter
 from app.issue_details import build_issue_deep_analysis
 from app.jira_knowledge import build_jira_chunks, filter_jira_doc_chunks, filter_product_doc_chunks
@@ -79,6 +80,17 @@ class DocsQuestionPayload(BaseModel):
 
 class JiraDocsQuestionPayload(DocsQuestionPayload):
     snapshot_date: str | None = None
+
+
+class JiraConnectionResponse(BaseModel):
+    ok: bool
+    base_url: str
+    server_title: str | None = None
+    version: str | None = None
+    deployment_type: str | None = None
+    authenticated_user: str | None = None
+    project_filter_count: int
+    has_jql: bool
 
 
 def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) -> None:
@@ -237,6 +249,22 @@ def _execute_queued_run(run_id: int, run_type: str, payload_json: str | None, re
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/integrations/jira/health")
+def get_jira_connection_health(config_path: str | None = None) -> dict[str, object]:
+    config, _ = _bootstrap(config_path)
+    try:
+        return JiraConnectionResponse.model_validate(JiraCrawler(config.jira).check_connection()).model_dump()
+    except CrawlerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "base_url": config.jira.base_url,
+                "message": str(exc),
+            },
+        ) from exc
 
 
 @app.post("/tasks/reports/management-summary")

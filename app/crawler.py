@@ -24,20 +24,37 @@ class JiraCrawler:
     def __init__(self, config: JiraConfig) -> None:
         self.config = config
 
+    def check_connection(self) -> dict[str, object]:
+        client = self._build_client()
+        server_info = {}
+        myself = None
+        try:
+            server_info = client.server_info() or {}
+        except Exception:
+            server_info = {}
+        try:
+            myself = client.myself()
+        except Exception:
+            myself = None
+        authenticated_user = None
+        if isinstance(myself, dict):
+            authenticated_user = myself.get("displayName") or myself.get("name")
+        return {
+            "ok": True,
+            "base_url": self.config.base_url,
+            "server_title": server_info.get("serverTitle"),
+            "version": server_info.get("version"),
+            "deployment_type": server_info.get("deploymentType"),
+            "authenticated_user": authenticated_user,
+            "project_filter_count": len(self.config.project_filters),
+            "has_jql": bool(self.config.jql.strip()),
+        }
+
     def crawl(self, snapshot_date: str | None = None) -> CrawlResult:
         snapshot_date = snapshot_date or date.today().isoformat()
-        try:
-            from jira import JIRA
-        except ImportError as exc:
-            raise CrawlerError("jira is not installed. Install with `pip install jira`.") from exc
-
         issues: dict[str, IssueRecord] = {}
         change_events: dict[str, IssueChangeEvent] = {}
-        options = {"server": self.config.base_url, "timeout": self.config.timeout_seconds}
-        try:
-            client = JIRA(options=options, token_auth=self.config.access_token.strip() or None)
-        except Exception as exc:  # pragma: no cover
-            raise CrawlerError(f"Failed to connect to Jira at {self.config.base_url}: {exc}") from exc
+        client = self._build_client()
 
         for jira_filter in self.config.project_filters:
             query = self._extract_jql(jira_filter.url)
@@ -57,6 +74,18 @@ class JiraCrawler:
                 change_events[event.event_id] = event
 
         return CrawlResult(snapshot_date=snapshot_date, issues=list(issues.values()), change_events=list(change_events.values()))
+
+    def _build_client(self):
+        try:
+            from jira import JIRA
+        except ImportError as exc:
+            raise CrawlerError("jira is not installed. Install with `pip install jira`.") from exc
+
+        options = {"server": self.config.base_url, "timeout": self.config.timeout_seconds}
+        try:
+            return JIRA(options=options, token_auth=self.config.access_token.strip() or None)
+        except Exception as exc:  # pragma: no cover
+            raise CrawlerError(f"Failed to connect to Jira at {self.config.base_url}: {exc}") from exc
 
     def _extract_jql(self, url: str) -> str:
         parsed = urlparse(url)
