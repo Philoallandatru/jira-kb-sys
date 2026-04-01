@@ -10,7 +10,16 @@ from requests import RequestException
 
 from app.analysis import LLMClient
 from app.config import AppConfig
-from app.models import IssueAIAnalysis, IssueChangeEvent, IssueDelta, IssueRecord, ManagementSummaryMetrics, ManagementSummaryRequest, ManagementSummaryResult, utc_now_iso
+from app.models import (
+    IssueAIAnalysis,
+    IssueChangeEvent,
+    IssueDelta,
+    IssueRecord,
+    ManagementSummaryMetrics,
+    ManagementSummaryRequest,
+    ManagementSummaryResult,
+    utc_now_iso,
+)
 from app.repository import Repository
 
 
@@ -39,7 +48,9 @@ def build_management_summary(
                     "metrics": metrics.to_dict(),
                     "recent_issues": [issue.to_dict() for issue in recent_issues[:20]],
                     "recent_deltas": [delta.to_dict() for delta in deltas if delta.issue_key in set(issue_keys)][:50],
-                    "recent_change_events": [event.to_dict() for event in change_events if event.issue_key in set(issue_keys)][:50],
+                    "recent_change_events": [event.to_dict() for event in change_events if event.issue_key in set(issue_keys)][
+                        :50
+                    ],
                     "issue_analyses": {key: value.to_dict() for key, value in issue_analyses.items() if key in set(issue_keys)},
                 },
                 ensure_ascii=False,
@@ -69,7 +80,9 @@ def build_management_summary(
             recommended_management_actions=_ensure_list(payload.get("recommended_management_actions")),
             data_gaps=_ensure_list(payload.get("data_gaps")),
             referenced_issue_keys=_ensure_list(payload.get("referenced_issue_keys")) or issue_keys[:10],
-            referenced_metrics=payload.get("referenced_metrics") if isinstance(payload.get("referenced_metrics"), dict) else _referenced_metrics(metrics),
+            referenced_metrics=payload.get("referenced_metrics")
+            if isinstance(payload.get("referenced_metrics"), dict)
+            else _referenced_metrics(metrics),
             raw_response=json.dumps(payload, ensure_ascii=False),
         )
     except (RequestException, ValueError, KeyError):
@@ -79,7 +92,13 @@ def build_management_summary(
 def write_management_summary_files(config: AppConfig, result: ManagementSummaryResult) -> dict[str, str]:
     team_slug = (result.request.team or "all").lower()
     status_slug = "-".join(result.request.jira_status).lower() if result.request.jira_status else "all"
-    output_dir = Path(config.storage.output_dir) / "management" / f"{result.request.date_from}_to_{result.request.date_to}" / team_slug / status_slug
+    output_dir = (
+        Path(config.storage.output_dir)
+        / "management"
+        / f"{result.request.date_from}_to_{result.request.date_to}"
+        / team_slug
+        / status_slug
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     md_path = output_dir / "summary.md"
     json_path = output_dir / "summary.json"
@@ -97,7 +116,7 @@ def write_management_summary_files(config: AppConfig, result: ManagementSummaryR
 
 def render_management_markdown(result: ManagementSummaryResult) -> str:
     lines = [
-        f"# Jira 管理层摘要",
+        "# Jira 管理层摘要",
         "",
         f"- 时间范围: {result.request.date_from} ~ {result.request.date_to}",
         f"- 团队筛选: {result.request.team or 'All'}",
@@ -109,7 +128,7 @@ def render_management_markdown(result: ManagementSummaryResult) -> str:
         f"- 状态推进数量: {result.metrics.status_progress_count}",
         f"- 关闭数量: {result.metrics.closed_count}",
         f"- 重开数量: {result.metrics.reopened_count}",
-        f"- 负责人变化数量: {result.metrics.assignee_change_count}",
+        f"- 负责人变更数量: {result.metrics.assignee_change_count}",
         f"- 当前阻塞数量: {result.metrics.blocked_count}",
         f"- 当前高优先级未关闭数量: {result.metrics.high_priority_open_count}",
         "",
@@ -125,12 +144,15 @@ def render_management_markdown(result: ManagementSummaryResult) -> str:
     lines.extend(["", "## 给管理层的建议动作"])
     lines.extend([f"- {item}" for item in result.recommended_management_actions])
     lines.extend(["", "## 数据不足"])
-    lines.extend([f"- {item}" for item in result.data_gaps] or ["- 无"])
+    lines.extend([f"- {item}" for item in result.data_gaps] or ["- 暂无"])
     return "\n".join(lines) + "\n"
 
 
 def render_management_pdf(result: ManagementSummaryResult, html_path: Path, pdf_path: Path) -> bool:
-    env = Environment(loader=FileSystemLoader(str(Path(__file__).resolve().parent.parent / "templates")), autoescape=select_autoescape(["html", "xml"]))
+    env = Environment(
+        loader=FileSystemLoader(str(Path(__file__).resolve().parent.parent / "templates")),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
     html = env.get_template("management_summary.html").render(result=result.to_dict())
     html_path.write_text(html, encoding="utf-8")
     try:
@@ -142,7 +164,6 @@ def render_management_pdf(result: ManagementSummaryResult, html_path: Path, pdf_
 
 
 def _select_recent_issues(issues: list[IssueRecord], deltas: list[IssueDelta], request: ManagementSummaryRequest) -> list[IssueRecord]:
-    issue_map = {issue.issue_key: issue for issue in issues}
     changed_keys = {delta.issue_key for delta in deltas}
     status_filter = {item.lower() for item in request.jira_status}
     selected: list[IssueRecord] = []
@@ -250,7 +271,10 @@ def _fallback_management_summary(
     issue_map = {issue.issue_key: issue for issue in issues}
     top_recent = issues[:5]
     latest_progress_overview = [
-        f"{metrics.updated_issue_count} 个最近更新的 Jira 进入本次摘要，关闭 {metrics.closed_count} 个，重开 {metrics.reopened_count} 个，当前阻塞 {metrics.blocked_count} 个。"
+        (
+            f"{metrics.updated_issue_count} 个最近更新的 Jira 进入本次摘要，"
+            f"关闭 {metrics.closed_count} 个，重开 {metrics.reopened_count} 个，当前阻塞 {metrics.blocked_count} 个。"
+        )
     ]
     key_recent_changes: list[str] = []
     for delta in deltas:
@@ -269,11 +293,17 @@ def _fallback_management_summary(
     ][:8]
     root_cause_and_pattern_observations = []
     if metrics.reopened_count:
-        root_cause_and_pattern_observations.append(f"时间窗口内有 {metrics.reopened_count} 个重开事件，说明部分问题闭环质量不足。")
+        root_cause_and_pattern_observations.append(
+            f"时间窗口内有 {metrics.reopened_count} 个重开事件，说明部分问题的关闭质量仍然不足。"
+        )
     if metrics.assignee_change_count:
-        root_cause_and_pattern_observations.append(f"时间窗口内有 {metrics.assignee_change_count} 次负责人变化，协作路径可能存在抖动。")
+        root_cause_and_pattern_observations.append(
+            f"时间窗口内有 {metrics.assignee_change_count} 次负责人变化，协作路径可能存在抖动。"
+        )
     if metrics.issues_without_root_cause:
-        root_cause_and_pattern_observations.append(f"{metrics.issues_without_root_cause} 个最近更新 Jira 未看到明确根因描述，根因透明度不足。")
+        root_cause_and_pattern_observations.append(
+            f"{metrics.issues_without_root_cause} 个最近更新的 Jira 还没有明确根因描述，根因透明度不足。"
+        )
     for issue in top_recent:
         analysis = issue_analyses.get(issue.issue_key)
         if analysis and analysis.suspected_root_cause and "insufficient" not in analysis.suspected_root_cause.lower():
@@ -282,30 +312,38 @@ def _fallback_management_summary(
                 break
     recommended_management_actions = []
     if current_risks_and_blockers:
-        recommended_management_actions.append("优先逐条确认阻塞与高优先级未关闭 Jira 的 owner、计划时间和解除条件。")
+        recommended_management_actions.append(
+            "优先逐条确认阻塞项和高优先级未关闭 Jira 的 owner、计划时间和解除条件。"
+        )
     if metrics.reopened_count:
-        recommended_management_actions.append("针对重开 Jira 做闭环复盘，识别验证不足或发布条件不充分的问题。")
+        recommended_management_actions.append(
+            "针对重开 Jira 做闭环复盘，识别验证不足或发布条件不充分的问题。"
+        )
     if metrics.assignee_change_count:
-        recommended_management_actions.append("检查负责人频繁切换的 Jira，明确唯一 owner，降低跨团队交接损耗。")
+        recommended_management_actions.append(
+            "检查负责人频繁切换的 Jira，明确唯一 owner，降低跨团队交接损耗。"
+        )
     if metrics.issues_without_root_cause:
-        recommended_management_actions.append("要求高风险 Jira 补齐根因字段或等价说明，避免管理层只能看到现象。")
+        recommended_management_actions.append(
+            "要求高风险 Jira 补齐根因字段或等价说明，避免管理层只能看到现象。"
+        )
     data_gaps = []
     if metrics.issues_without_owner:
-        data_gaps.append(f"{metrics.issues_without_owner} 个最近更新 Jira 缺少负责人，协作效率判断不完整。")
+        data_gaps.append(f"{metrics.issues_without_owner} 个最近更新的 Jira 缺少负责人，协作效率判断不完整。")
     if metrics.issues_without_root_cause:
-        data_gaps.append(f"{metrics.issues_without_root_cause} 个最近更新 Jira 缺少明确根因描述。")
+        data_gaps.append(f"{metrics.issues_without_root_cause} 个最近更新的 Jira 缺少明确根因描述。")
     if not deltas:
-        data_gaps.append("当前时间范围内没有抓到变更事件，重点变化判断依赖 updated_at。")
+        data_gaps.append("当前时间范围内没有抓到变更事件，重点变化判断只能依赖 updated_at。")
     return ManagementSummaryResult(
         summary_id=run_id,
         generated_at=utc_now_iso(),
         request=request,
         metrics=metrics,
         latest_progress_overview=latest_progress_overview,
-        key_recent_changes=key_recent_changes or ["当前时间范围内未发现显著状态推进、关闭、重开或负责人变化。"],
+        key_recent_changes=key_recent_changes or ["当前时间范围内未发现显著的状态推进、关闭、重开或负责人变化。"],
         current_risks_and_blockers=current_risks_and_blockers or ["未发现明确阻塞，但仍需关注高优先级未关闭项。"],
         root_cause_and_pattern_observations=root_cause_and_pattern_observations or ["当前数据不足以形成稳定的根因模式判断。"],
-        recommended_management_actions=recommended_management_actions or ["继续观察最近更新 Jira，并补充根因与责任人信息。"],
+        recommended_management_actions=recommended_management_actions or ["继续观察最近更新的 Jira，并补充根因与责任人信息。"],
         data_gaps=data_gaps,
         referenced_issue_keys=metrics.referenced_issue_keys,
         referenced_metrics=_referenced_metrics(metrics),

@@ -18,7 +18,6 @@ class _HTMLToMarkdownParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.lines: list[str] = []
-        self.href_stack: list[str | None] = []
         self.list_stack: list[str] = []
         self.current_href: str | None = None
         self.current_heading_level: int | None = None
@@ -101,14 +100,17 @@ class ConfluenceCrawler:
         }
 
     def crawl_documents(self) -> list[MarkdownDocument]:
+        if self.config.crawl_mode != "space":
+            raise ConfluenceError(f"Unsupported Confluence crawl_mode `{self.config.crawl_mode}`. Only `space` is supported.")
         client = self._build_client()
-        root_page_ids = {page_id for page_id in (self._extract_page_id(url) for url in self.config.root_page_urls) if page_id}
-        documents: list[MarkdownDocument] = []
+        root_page_ids = self._resolve_root_page_ids()
+        documents_by_id: dict[str, MarkdownDocument] = {}
         if not self.config.space_keys:
-            return documents
+            return []
         for space_key in self.config.space_keys:
-            documents.extend(self._crawl_space_documents(client, space_key, root_page_ids))
-        return documents
+            for document in self._crawl_space_documents(client, space_key, root_page_ids):
+                documents_by_id.setdefault(document.document_id, document)
+        return list(documents_by_id.values())
 
     def _crawl_space_documents(self, client, space_key: str, root_page_ids: set[str]) -> list[MarkdownDocument]:
         start = 0
@@ -140,7 +142,6 @@ class ConfluenceCrawler:
         page_id = str(page.get("id"))
         title = str(page.get("title") or f"Confluence {page_id}")
         ancestors = [item.get("title", "") for item in page.get("ancestors", []) if item.get("title")]
-        body_html = (((page.get("body") or {}).get("storage") or {}).get("value")) or ""
         markdown = self._render_page_markdown(title, space_key, page_id, ancestors, page)
         path_slug = _slugify("/".join([space_key, *ancestors, title]))
         markdown_path = self.markdown_dir / "confluence" / space_key / f"{path_slug}.md"
@@ -232,6 +233,24 @@ class ConfluenceCrawler:
         if match:
             return match.group(1)
         return None
+
+    def _resolve_root_page_ids(self) -> set[str]:
+        if not self.config.root_page_urls:
+            return set()
+        root_page_ids: set[str] = set()
+        invalid_urls: list[str] = []
+        for url in self.config.root_page_urls:
+            page_id = self._extract_page_id(url)
+            if page_id:
+                root_page_ids.add(page_id)
+            else:
+                invalid_urls.append(url)
+        if invalid_urls:
+            raise ConfluenceError(
+                "Unable to extract pageId from root_page_urls. Use Confluence pageId URLs for subtree filtering: "
+                + ", ".join(invalid_urls)
+            )
+        return root_page_ids
 
 
 def _slugify(text: str) -> str:
