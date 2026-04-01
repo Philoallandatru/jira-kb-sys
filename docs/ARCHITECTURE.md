@@ -1,70 +1,82 @@
-# 系统架构
+# Architecture
 
-## 总览
+## Overview
 
-当前系统由四层组成：
+The system is organized into four layers:
 
-1. Jira 数据采集层
-2. 文档知识库层
-3. AI 分析与问答层
-4. 前端与接口层
+1. Jira ingestion and historical reconstruction
+2. Document ingestion and retrieval indexing
+3. AI analysis and QA
+4. API, task execution, and frontend delivery
 
-## 1. Jira 数据采集层
+## 1. Jira Ingestion
 
-核心文件：
+Core files:
 
-- [app/crawler.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/crawler.py)
-- [app/repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
+- [crawler.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/crawler.py)
+- [repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
 
-当前实现：
+Responsibilities:
 
-- 通过 `jira` Python 客户端读取 issue 快照
-- 支持连接探测 `GET /integrations/jira/health`
-- 每次同步会保存：
-  - `issues_current`
-  - `issues_daily_snapshot`
-  - `issue_events_derived`
-  - `issue_change_events`
+- query Jira issues and changelog data
+- map standard fields and configured custom fields into structured `IssueRecord`
+- derive snapshot deltas
+- persist snapshots, current state, and raw change events
 
-说明：
+Structured extraction now includes:
 
-- `issue_events_derived` 来自相邻快照 diff
-- `issue_change_events` 来自 Jira changelog
-- full-sync 会基于当前 issue 和 changelog 做历史近似回放
+- issue type, versions, resolution, severity
+- report department, root cause, frequency, fail runtime
+- description table fields such as firmware version, platform, script, expected and actual result
+- comments, issue links, blocks links, mentioned-in links
 
-## 2. 文档知识库层
+Description parsing strategy:
 
-核心文件：
+1. ADF table extraction
+2. key/value text extraction
+3. raw description fallback
 
-- [app/docs.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/docs.py)
-- [app/jira_knowledge.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/jira_knowledge.py)
-- [app/repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
+## 2. Document Ingestion and Retrieval
 
-当前实现：
+Core files:
 
-- 将本地文档转换为 Markdown
-- 将 Markdown 切块后写入 `doc_chunks`
-- 将 Jira knowledge 也写入 `doc_chunks`
-- 使用 BM25 做本地检索
+- [docs.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/docs.py)
+- [confluence.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/confluence.py)
+- [jira_knowledge.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/jira_knowledge.py)
 
-知识库服务于：
+Document sources:
 
-- 日报分析
-- 单 Jira 深度分析
-- 文档问答
-- Jira + 文档联合问答
+- local documents with source types like `local_pdf`
+- Confluence pages with source type `confluence_page`
+- Jira-generated knowledge with source types:
+  - `jira_issue`
+  - `jira_issue_analysis`
+  - `jira_daily_analysis`
 
-## 3. AI 分析与问答层
+Flow:
 
-核心文件：
+- source content is normalized to Markdown
+- Markdown is chunked with overlap
+- chunks are written into `doc_chunks`
+- BM25 is used for local retrieval
 
-- [app/analysis.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/analysis.py)
-- [app/management.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/management.py)
-- [app/issue_details.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/issue_details.py)
-- [app/qa.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/qa.py)
-- [app/prompts.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/prompts.py)
+Confluence flow:
 
-当前场景：
+- `ConfluenceCrawler` connects with Basic + Token auth
+- configured spaces are paginated
+- pages are converted from storage HTML into Markdown
+- page metadata such as URL, ancestors, page id, and update time are preserved
+
+## 3. AI Analysis and QA
+
+Core files:
+
+- [analysis.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/analysis.py)
+- [issue_details.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/issue_details.py)
+- [management.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/management.py)
+- [qa.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/qa.py)
+
+Scenarios:
 
 - `daily_report`
 - `issue_deep_analysis`
@@ -72,93 +84,48 @@
 - `jira_docs_qa`
 - `management_summary`
 
-Prompt 配置策略：
+Analysis behavior:
 
-- 所有输出默认简体中文
-- 支持 `custom_prompts`
-- 支持 `scenario_max_output_tokens`
+- retrieval query generation now includes structured Jira fields
+- deep analysis builds an explicit issue fact sheet before calling the LLM
+- related issue matching is no longer token-only; it considers component, root cause, platform, script, versions, and block targets
+- management summary metrics now include distributions for issue type, severity, root cause, report department, and component
 
-## 4. 前端与接口层
+Fallback behavior remains in place when the LLM endpoint is unavailable.
 
-### Streamlit
+## 4. API and Task Execution
 
-核心文件：
+Core files:
 
-- [app/ui.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/ui.py)
+- [api.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/api.py)
+- [cli.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/cli.py)
+- [repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
 
-定位：
+Task model:
 
-- 内部运维台
-- 人工巡检和调试入口
+- API creates queued jobs in `runs`
+- a single in-process worker loop claims and executes jobs
+- interrupted `running` jobs are re-queued on restart
+- failed jobs are retried up to the configured in-process limit
 
-### FastAPI
+Relevant task types:
 
-核心文件：
+- incremental Jira sync
+- full Jira sync
+- Confluence sync
+- build docs
+- analyze
+- report
+- management summary
 
-- [app/api.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/api.py)
+Integration health checks:
 
-已提供能力：
+- `GET /integrations/jira/health`
+- `GET /integrations/confluence/health`
 
-- Dashboard 数据
-- 日报列表与详情
-- 管理层摘要任务
-- Jira 列表与详情
-- 单 Jira 深度分析
-- 文档问答
-- Jira + 文档联合问答
-- Prompt 设置读取与更新
-- Jira 连通性检查
-- 持久化任务队列 API
+## Storage
 
-### 独立前端
-
-核心目录：
-
-- [frontend](/E:/Code/AI/codex/pr-agent/jira-summary/frontend)
-
-技术栈：
-
-- Next.js
-- TypeScript
-
-已接通页面：
-
-- `/dashboard`
-- `/reports`
-- `/management-summary`
-- `/issues`
-- `/docs-qa`
-- `/jira-docs-qa`
-- `/tasks`
-- `/settings`
-
-任务页额外能力：
-
-- 查看任务开始/结束时间
-- 查看尝试次数
-- 查看最后错误
-- 检查 Jira 连通性
-
-## 任务执行架构
-
-核心文件：
-
-- [app/api.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/api.py)
-- [app/repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
-
-当前模型：
-
-- API 请求只负责创建 `queued` 任务
-- 应用生命周期中启动一个后台 worker
-- worker 从 `runs` 表 claim 任务并执行
-- 失败任务支持自动重试
-- 服务重启时会回收中断的 `running` 任务
-
-当前还不是分布式任务系统，只是单进程持久化 worker。
-
-## 数据存储
-
-SQLite 主要表：
+Primary SQLite tables:
 
 - `runs`
 - `issues_current`
@@ -170,19 +137,23 @@ SQLite 主要表：
 - `ai_analysis_issue`
 - `ai_management_summary`
 
-## 运行环境说明
+Most entity evolution is handled through JSON payload compatibility rather than relational schema expansion. That keeps the system tolerant of new structured Jira fields without requiring table migrations for every field addition.
 
-项目同时支持 Windows PowerShell 和 Linux / bash。
+## Frontend
 
-最关键的运行时变量：
+The Next.js frontend consumes the FastAPI layer and exposes:
 
-- `PYTHONPATH`
-- `NEXT_PUBLIC_API_BASE_URL`
+- `/dashboard`
+- `/reports`
+- `/management-summary`
+- `/issues`
+- `/docs-qa`
+- `/jira-docs-qa`
+- `/tasks`
+- `/settings`
 
-具体设置方法见 [docs/RUNBOOK.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/RUNBOOK.md)。
+## Current Limitations
 
-## 当前仍未完全完成
-
-详细缺口见：
-
-- [docs/GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md)
+- historical reconstruction is still inferred from current issue state plus changelog
+- task execution is not distributed
+- Confluence subtree crawl is implemented as space crawl plus optional root filtering, not a dedicated child-tree traversal starting from each root page
