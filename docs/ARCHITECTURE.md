@@ -19,7 +19,8 @@
 当前实现：
 
 - 通过 `jira` Python 客户端读取 issue 快照
-- 每次 `crawl` 保存：
+- 支持连接探测 `GET /integrations/jira/health`
+- 每次同步会保存：
   - `issues_current`
   - `issues_daily_snapshot`
   - `issue_events_derived`
@@ -29,22 +30,24 @@
 
 - `issue_events_derived` 来自相邻快照 diff
 - `issue_change_events` 来自 Jira changelog
-- 管理层摘要优先读取 changelog 事件，读不到时回退到快照差分
+- full-sync 会基于当前 issue 和 changelog 做历史近似回放
 
 ## 2. 文档知识库层
 
 核心文件：
 
 - [app/docs.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/docs.py)
+- [app/jira_knowledge.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/jira_knowledge.py)
 - [app/repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
 
 当前实现：
 
 - 将本地文档转换为 Markdown
 - 将 Markdown 切块后写入 `doc_chunks`
+- 将 Jira knowledge 也写入 `doc_chunks`
 - 使用 BM25 做本地检索
 
-知识库主要服务于：
+知识库服务于：
 
 - 日报分析
 - 单 Jira 深度分析
@@ -104,6 +107,8 @@ Prompt 配置策略：
 - 文档问答
 - Jira + 文档联合问答
 - Prompt 设置读取与更新
+- Jira 连通性检查
+- 持久化任务队列 API
 
 ### 独立前端
 
@@ -122,14 +127,34 @@ Prompt 配置策略：
 - `/reports`
 - `/management-summary`
 - `/issues`
+- `/docs-qa`
+- `/jira-docs-qa`
+- `/tasks`
 - `/settings`
 
-视觉风格：
+任务页额外能力：
 
-- 复古现代感
-- 纸张色背景
-- 暖色金属与油墨色系
-- 宽留白与低噪音信息密度
+- 查看任务开始/结束时间
+- 查看尝试次数
+- 查看最后错误
+- 检查 Jira 连通性
+
+## 任务执行架构
+
+核心文件：
+
+- [app/api.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/api.py)
+- [app/repository.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/repository.py)
+
+当前模型：
+
+- API 请求只负责创建 `queued` 任务
+- 应用生命周期中启动一个后台 worker
+- worker 从 `runs` 表 claim 任务并执行
+- 失败任务支持自动重试
+- 服务重启时会回收中断的 `running` 任务
+
+当前还不是分布式任务系统，只是单进程持久化 worker。
 
 ## 数据存储
 
@@ -144,6 +169,17 @@ SQLite 主要表：
 - `ai_analysis_daily`
 - `ai_analysis_issue`
 - `ai_management_summary`
+
+## 运行环境说明
+
+项目同时支持 Windows PowerShell 和 Linux / bash。
+
+最关键的运行时变量：
+
+- `PYTHONPATH`
+- `NEXT_PUBLIC_API_BASE_URL`
+
+具体设置方法见 [docs/RUNBOOK.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/RUNBOOK.md)。
 
 ## 当前仍未完全完成
 

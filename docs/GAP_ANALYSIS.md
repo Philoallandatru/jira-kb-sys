@@ -25,6 +25,7 @@
 - Jira 快照与 AI 分析进入统一知识切块链路
 - Jira + Docs 联合检索
 - 持久化任务队列与应用内 worker
+- Jira 连通性检查接口与前端按钮
 
 ## 当前已补齐的能力
 
@@ -32,6 +33,7 @@
 
 - `POST /tasks/sync/incremental`
 - `POST /tasks/sync/full`
+- `POST /tasks/crawl`
 - CLI `incremental-sync`
 - CLI `full-sync --date-from --date-to`
 - full-sync 支持按日期区间回补
@@ -51,6 +53,13 @@
 - 应用启动时会回收中断的 `running` 任务
 - worker 会自动重试失败任务，默认最多 3 次
 - 前端任务中心可查看创建时间、开始时间、结束时间、尝试次数和最后错误
+
+### 运维与排错
+
+- 增加了 `GET /integrations/jira/health`
+- 任务页可直接点击 `Check Jira Connection`
+- 文档已同时给出 Windows PowerShell 与 Linux / bash 的环境变量设置方法
+- 前端请求错误会包含实际请求 URL，便于排查错误的 API base URL
 
 ## 仍然存在的边界
 

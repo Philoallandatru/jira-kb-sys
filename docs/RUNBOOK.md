@@ -15,40 +15,120 @@
 - `streamlit`
 - `weasyprint`
 
+## 环境变量
+
+### Windows PowerShell
+
+当前会话：
+
+```powershell
+$env:PYTHONPATH='.'
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+```
+
+持久化到用户环境：
+
+```powershell
+setx PYTHONPATH "."
+setx NEXT_PUBLIC_API_BASE_URL "http://127.0.0.1:8000"
+```
+
+### Linux / bash
+
+当前会话：
+
+```bash
+export PYTHONPATH=.
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
+
+持久化到 `~/.bashrc`：
+
+```bash
+echo 'export PYTHONPATH=.' >> ~/.bashrc
+echo 'export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000' >> ~/.bashrc
+source ~/.bashrc
+```
+
 ## 启动后端
+
+### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
 uvicorn app.api:app --reload
 ```
 
+### Linux / bash
+
+```bash
+export PYTHONPATH=.
+uvicorn app.api:app --reload
+```
+
 健康检查：
 
-```powershell
+```bash
 curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/integrations/jira/health
 ```
 
 ## 启动独立前端
 
+### Windows PowerShell
+
 ```powershell
 cd frontend
 npm install
-$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+npm run dev
+```
+
+### Linux / bash
+
+```bash
+cd frontend
+npm install
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
 ## 启动 Streamlit 运维台
+
+### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
 streamlit run app/ui.py
 ```
 
+### Linux / bash
+
+```bash
+export PYTHONPATH=.
+streamlit run app/ui.py
+```
+
 ## 常用 CLI
+
+### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
-python -m app.cli crawl
+python -m app.cli incremental-sync
+python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+python -m app.cli build-docs
+python -m app.cli analyze --date 2026-03-31
+python -m app.cli report --date 2026-03-31
+python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
+```
+
+### Linux / bash
+
+```bash
+export PYTHONPATH=.
+python -m app.cli incremental-sync
+python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
 python -m app.cli build-docs
 python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
@@ -56,6 +136,11 @@ python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31
 ```
 
 ## 常用 API
+
+### 系统与集成
+
+- `GET /health`
+- `GET /integrations/jira/health`
 
 ### Dashboard
 
@@ -70,6 +155,17 @@ python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31
 
 - `POST /tasks/reports/management-summary`
 - `GET /reports/management-summary/{run_id}`
+
+### Tasks
+
+- `POST /tasks/sync/incremental`
+- `POST /tasks/sync/full`
+- `POST /tasks/crawl`
+- `POST /tasks/build-docs`
+- `POST /tasks/analyze`
+- `POST /tasks/report`
+- `GET /tasks`
+- `GET /tasks/{run_id}`
 
 ### Issues
 
@@ -89,16 +185,22 @@ python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31
 
 ## 测试与验证
 
-Python 测试：
+### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
 pytest tests
+python -m compileall app
+cd frontend
+npm run build
 ```
 
-前端构建：
+### Linux / bash
 
-```powershell
+```bash
+export PYTHONPATH=.
+pytest tests
+python -m compileall app
 cd frontend
 npm run build
 ```
@@ -107,10 +209,16 @@ npm run build
 
 ### 1. `pytest` 找不到 `app`
 
-在 Windows PowerShell 下先设置：
+Windows PowerShell：
 
 ```powershell
 $env:PYTHONPATH='.'
+```
+
+Linux / bash：
+
+```bash
+export PYTHONPATH=.
 ```
 
 ### 2. 管理层摘要没有 PDF
@@ -123,12 +231,15 @@ $env:PYTHONPATH='.'
 
 - `uvicorn app.api:app --reload` 是否已启动
 - `NEXT_PUBLIC_API_BASE_URL` 是否正确
-- 本地数据库里是否已有 snapshot 数据
+- 修改前端环境变量后是否重新启动前端
+- `GET /integrations/jira/health` 是否可访问
+
+如果浏览器里看到 `//%3A/tasks/...` 这类 URL，说明前端 API base URL 配错了。
 
 ### 4. 单 Jira 深度分析为空
 
 优先检查：
 
-- 是否已经执行过 `crawl`
+- 是否已经执行过 `incremental-sync` 或 `crawl`
 - 是否已经执行过 `build-docs`
 - 本地知识库是否包含 spec / policy / design 文档

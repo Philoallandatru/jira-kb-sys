@@ -55,9 +55,7 @@ Jira knowledge 的 source type：
 - 进程异常中断后，启动时会把残留的 `running` 任务回收到 `queued`
 - 运行失败会自动重试，默认最多 3 次
 
-这让任务不再依赖触发它的那次 HTTP 请求存活。
-
-## 前端页面
+### 前端页面
 
 当前已接入：
 
@@ -71,7 +69,51 @@ Jira knowledge 的 source type：
 - `/tasks`
 - `/settings`
 
+## 环境变量
+
+最常用的环境变量只有两个：
+
+- `PYTHONPATH`
+- `NEXT_PUBLIC_API_BASE_URL`
+
+### Windows PowerShell
+
+只对当前终端会话生效：
+
+```powershell
+$env:PYTHONPATH='.'
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+```
+
+如果要写入用户级环境变量：
+
+```powershell
+setx PYTHONPATH "."
+setx NEXT_PUBLIC_API_BASE_URL "http://127.0.0.1:8000"
+```
+
+注意：`setx` 只对新开的终端生效。
+
+### Linux / bash
+
+只对当前 shell 会话生效：
+
+```bash
+export PYTHONPATH=.
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
+
+如果要长期生效，可以写入 `~/.bashrc` 或 `~/.zshrc`：
+
+```bash
+echo 'export PYTHONPATH=.' >> ~/.bashrc
+echo 'export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000' >> ~/.bashrc
+source ~/.bashrc
+```
+
 ## 常用命令
+
+### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
@@ -86,18 +128,38 @@ uvicorn app.api:app --reload
 streamlit run app/ui.py
 ```
 
-前端开发：
+### Linux / bash
+
+```bash
+export PYTHONPATH=.
+python -m app.cli incremental-sync
+python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+python -m app.cli build-docs
+python -m app.cli analyze --date 2026-03-31
+python -m app.cli report --date 2026-03-31
+python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
+python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
+uvicorn app.api:app --reload
+streamlit run app/ui.py
+```
+
+### 前端开发
+
+Windows PowerShell：
 
 ```powershell
 cd frontend
 npm install
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
 npm run dev
 ```
 
-如需指定后端地址：
+Linux / bash：
 
-```powershell
-$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
+```bash
+cd frontend
+npm install
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
@@ -106,6 +168,7 @@ npm run dev
 核心接口包括：
 
 - `GET /health`
+- `GET /integrations/jira/health`
 - `GET /dashboard/overview`
 - `GET /reports/daily`
 - `GET /reports/daily/{report_date}`
@@ -165,6 +228,17 @@ llm:
   架构、运行和差距说明
 - [tests](/E:/Code/AI/codex/pr-agent/jira-summary/tests)
   回归测试
+
+## 前端 404 排查
+
+如果任务页点击后显示 404，优先检查：
+
+1. 后端是不是最新代码并且已经重启。
+2. `NEXT_PUBLIC_API_BASE_URL` 是否是合法地址。
+3. 前端是否在修改环境变量后重新启动或重新构建。
+4. 任务页里的 `Check Jira Connection` 是否能正常返回结果。
+
+如果浏览器里看到类似 `//%3A/tasks/...` 这种 URL，通常是 `NEXT_PUBLIC_API_BASE_URL` 配错了。
 
 ## 仍然存在的边界
 
