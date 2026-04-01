@@ -83,14 +83,16 @@ def answer_question(config: AppConfig, index: BM25Index, question: str, top_k: i
 def answer_jira_docs_question(
     config: AppConfig,
     index: BM25Index,
+    jira_index: BM25Index | None,
     question: str,
     issues: list[IssueRecord],
     issue_analyses: list[IssueAIAnalysis],
     daily_analysis: DailyAIAnalysis | None = None,
     top_k: int = 5,
     top_issue_k: int = 5,
+    top_jira_k: int = 3,
 ) -> CombinedQAResult:
-    hits = index.search(question, top_k=top_k)
+    hits = _merge_hits(index.search(question, top_k=top_k), jira_index.search(question, top_k=top_jira_k) if jira_index else [])
     doc_citations = [_citation(hit) for hit in hits]
     jira_context = _select_relevant_issues(question, issues, issue_analyses, top_issue_k)
     try:
@@ -168,7 +170,7 @@ def _fallback_combined_answer(
         section = " / ".join(top_hit.chunk.section_path) if top_hit.chunk.section_path else top_hit.chunk.doc_title
         preview = " ".join(top_hit.chunk.content.split())
         preview = preview[:420] + ("..." if len(preview) > 420 else "")
-        parts.append(f"Best matching design/spec evidence is from {section}: {preview}")
+        parts.append(f"Best matching knowledge evidence is from {section}: {preview}")
     if not parts:
         return "No relevant Jira or document evidence was found for this question."
     return " ".join(parts)
@@ -176,6 +178,7 @@ def _fallback_combined_answer(
 
 def _citation(hit: SearchHit) -> dict[str, Any]:
     return {
+        "source_type": hit.chunk.source_type,
         "source_path": hit.chunk.source_path,
         "section_path": hit.chunk.section_path,
         "quote": " ".join(hit.chunk.content.split())[:240],
@@ -240,3 +243,15 @@ def _select_relevant_issues(
 
 def _tokenize(text: str) -> list[str]:
     return [token for token in "".join(ch.lower() if ch.isalnum() else " " for ch in text).split() if token]
+
+
+def _merge_hits(doc_hits: list[SearchHit], jira_hits: list[SearchHit]) -> list[SearchHit]:
+    merged = sorted(doc_hits + jira_hits, key=lambda item: item.score, reverse=True)
+    seen: set[str] = set()
+    deduped: list[SearchHit] = []
+    for hit in merged:
+        if hit.chunk.chunk_id in seen:
+            continue
+        seen.add(hit.chunk.chunk_id)
+        deduped.append(hit)
+    return deduped

@@ -20,6 +20,8 @@ export function TaskCenterClient() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [reportDate, setReportDate] = useState(today);
   const [syncDate, setSyncDate] = useState(today);
+  const [syncDateFrom, setSyncDateFrom] = useState(today);
+  const [syncDateTo, setSyncDateTo] = useState(today);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
   const [team, setTeam] = useState("All");
@@ -122,14 +124,39 @@ export function TaskCenterClient() {
             <button
               className="primary-button"
               type="button"
-              onClick={() => launchTask("incremental-sync", () => createIncrementalSyncTask())}
+              onClick={() => launchTask("incremental-sync", () => createIncrementalSyncTask({ snapshot_date: syncDate }))}
             >
               Run Incremental Sync
             </button>
+            <div className="field">
+              <label htmlFor="task-sync-date-from">Full Sync From</label>
+              <input
+                id="task-sync-date-from"
+                type="date"
+                value={syncDateFrom}
+                onChange={(event) => setSyncDateFrom(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="task-sync-date-to">Full Sync To</label>
+              <input
+                id="task-sync-date-to"
+                type="date"
+                value={syncDateTo}
+                onChange={(event) => setSyncDateTo(event.target.value)}
+              />
+            </div>
             <button
               className="secondary-button"
               type="button"
-              onClick={() => launchTask("full-sync", () => createFullSyncTask({ snapshot_date: syncDate }))}
+              onClick={() =>
+                launchTask("full-sync", () =>
+                  createFullSyncTask({
+                    date_from: syncDateFrom,
+                    date_to: syncDateTo,
+                  })
+                )
+              }
             >
               Run Full Sync
             </button>

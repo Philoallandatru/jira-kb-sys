@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
 from urllib.parse import parse_qs, urlparse
 
@@ -204,3 +204,68 @@ def derive_issue_deltas(current: Iterable[IssueRecord], previous: Iterable[Issue
                 )
             )
     return deltas
+
+
+def reconstruct_snapshot_issues(
+    issues: Iterable[IssueRecord],
+    change_events: Iterable[IssueChangeEvent],
+    snapshot_date: str,
+) -> list[IssueRecord]:
+    target_end = _target_day_end(snapshot_date)
+    events_by_issue: dict[str, list[IssueChangeEvent]] = {}
+    for event in change_events:
+        events_by_issue.setdefault(event.issue_key, []).append(event)
+
+    reconstructed: list[IssueRecord] = []
+    for issue in issues:
+        created_at = _parse_jira_datetime(issue.created_at)
+        if created_at and created_at > target_end:
+            continue
+        current = replace(issue)
+        future_events = [
+            event
+            for event in events_by_issue.get(issue.issue_key, [])
+            if (_parse_jira_datetime(event.changed_at) or target_end) > target_end
+        ]
+        future_events.sort(key=lambda item: _parse_jira_datetime(item.changed_at) or target_end, reverse=True)
+        for event in future_events:
+            field = event.field.lower()
+            if field == "status" and event.from_value:
+                current.status = event.from_value
+            elif field == "assignee":
+                current.assignee = event.from_value
+        reconstructed.append(current)
+
+    reconstructed.sort(key=lambda item: item.issue_key)
+    return reconstructed
+
+
+def iter_snapshot_dates(date_from: str, date_to: str) -> list[str]:
+    start = datetime.fromisoformat(date_from).date()
+    end = datetime.fromisoformat(date_to).date()
+    if end < start:
+        raise CrawlerError("date_to must be on or after date_from")
+    values: list[str] = []
+    current = start
+    while current <= end:
+        values.append(current.isoformat())
+        current += timedelta(days=1)
+    return values
+
+
+def _target_day_end(snapshot_date: str) -> datetime:
+    return datetime.combine(datetime.fromisoformat(snapshot_date).date(), time.max).replace(tzinfo=timezone.utc)
+
+
+def _parse_jira_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return datetime.strptime(value, fmt).astimezone(timezone.utc)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None

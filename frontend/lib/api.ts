@@ -10,6 +10,8 @@ export type ManagementSummaryRequest = {
 
 export type SyncTaskRequest = {
   snapshot_date?: string;
+  date_from?: string;
+  date_to?: string;
   config_path?: string | null;
 };
 

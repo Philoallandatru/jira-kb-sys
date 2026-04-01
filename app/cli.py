@@ -8,7 +8,7 @@ import shutil
 
 from app.analysis import analyze_daily_report
 from app.config import AppConfig, load_config
-from app.crawler import JiraCrawler, derive_issue_deltas
+from app.crawler import JiraCrawler, derive_issue_deltas, iter_snapshot_dates, reconstruct_snapshot_issues
 from app.demo import build_demo_chunks, build_demo_issues
 from app.docs import BM25Index, DocumentConverter
 from app.jira_knowledge import build_jira_chunks, filter_product_doc_chunks
@@ -46,13 +46,28 @@ def incremental_sync(config_path: str | None = None) -> None:
 
 
 def full_sync(snapshot_date: str | None = None, config_path: str | None = None) -> None:
+    full_sync_range(date_from=snapshot_date, date_to=snapshot_date, config_path=config_path)
+
+
+def full_sync_range(date_from: str | None = None, date_to: str | None = None, config_path: str | None = None) -> None:
     config, repo = _bootstrap(config_path)
-    resolved_date = snapshot_date or date.today().isoformat()
-    run_id = repo.create_run("full-sync", resolved_date, "running")
+    resolved_from = date_from or date.today().isoformat()
+    resolved_to = date_to or resolved_from
+    run_id = repo.create_run("full-sync", f"{resolved_from}..{resolved_to}", "running")
     try:
-        _crawl_snapshot(config, repo, resolved_date)
-        repo.update_run(run_id, "success", f"Backfilled snapshot for {resolved_date}")
-        print(f"Full sync completed for {resolved_date}")
+        snapshot_dates = iter_snapshot_dates(resolved_from, resolved_to)
+        result = JiraCrawler(config.jira).crawl(resolved_to)
+        repo.save_change_events(result.change_events)
+        previous_date = repo.get_previous_snapshot_date(resolved_from)
+        previous_snapshot: list = repo.load_snapshot(previous_date) if previous_date else []
+        for current_date in snapshot_dates:
+            snapshot_issues = reconstruct_snapshot_issues(result.issues, result.change_events, current_date)
+            deltas = derive_issue_deltas(snapshot_issues, previous_snapshot)
+            repo.save_daily_snapshot(current_date, snapshot_issues)
+            repo.save_deltas(current_date, deltas)
+            previous_snapshot = snapshot_issues
+        repo.update_run(run_id, "success", f"Backfilled snapshots for {resolved_from}..{resolved_to}")
+        print(f"Full sync completed for {resolved_from}..{resolved_to}")
     except Exception as exc:
         repo.update_run(run_id, "failed", str(exc))
         raise
@@ -228,6 +243,8 @@ def main() -> None:
     subparsers.add_parser("incremental-sync")
     full_sync_parser = subparsers.add_parser("full-sync")
     full_sync_parser.add_argument("--date", dest="snapshot_date", default=None)
+    full_sync_parser.add_argument("--date-from", dest="date_from", default=None)
+    full_sync_parser.add_argument("--date-to", dest="date_to", default=None)
     subparsers.add_parser("build-docs")
     subparsers.add_parser("seed-demo")
     import_parser = subparsers.add_parser("import-file")
@@ -251,7 +268,10 @@ def main() -> None:
     elif args.command == "incremental-sync":
         incremental_sync(config_path=args.config_path)
     elif args.command == "full-sync":
-        full_sync(snapshot_date=args.snapshot_date, config_path=args.config_path)
+        if args.date_from or args.date_to:
+            full_sync_range(date_from=args.date_from, date_to=args.date_to, config_path=args.config_path)
+        else:
+            full_sync(snapshot_date=args.snapshot_date, config_path=args.config_path)
     elif args.command == "build-docs":
         build_docs(config_path=args.config_path)
     elif args.command == "seed-demo":

@@ -40,6 +40,10 @@ def filter_product_doc_chunks(chunks: list[DocChunk]) -> list[DocChunk]:
     return [chunk for chunk in chunks if not chunk.source_type.startswith(JIRA_SOURCE_PREFIX)]
 
 
+def filter_jira_doc_chunks(chunks: list[DocChunk]) -> list[DocChunk]:
+    return [chunk for chunk in chunks if chunk.source_type.startswith(JIRA_SOURCE_PREFIX)]
+
+
 def _build_issue_chunks(
     issue: IssueRecord,
     snapshot_date: str,

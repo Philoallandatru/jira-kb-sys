@@ -12,7 +12,7 @@ from app.analysis import analyze_daily_report
 from app.cli import _bootstrap
 from app.docs import BM25Index, DocumentConverter
 from app.issue_details import build_issue_deep_analysis
-from app.jira_knowledge import build_jira_chunks, filter_product_doc_chunks
+from app.jira_knowledge import build_jira_chunks, filter_jira_doc_chunks, filter_product_doc_chunks
 from app.management import build_management_summary, write_management_summary_files
 from app.models import ManagementSummaryRequest
 from app.qa import answer_jira_docs_question, answer_question
@@ -41,6 +41,8 @@ class DailyTaskRequest(BaseModel):
 
 class SyncTaskRequest(BaseModel):
     snapshot_date: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
     config_path: str | None = None
 
 
@@ -90,10 +92,23 @@ def _run_incremental_sync(run_id: int, request: SyncTaskRequest) -> None:
 
 def _run_full_sync(run_id: int, request: SyncTaskRequest) -> None:
     config, repo = _bootstrap(request.config_path)
-    snapshot_date = request.snapshot_date or date.today().isoformat()
     try:
-        _crawl_snapshot(config, repo, snapshot_date)
-        repo.update_run(run_id, "success", f"Backfilled snapshot for {snapshot_date}")
+        from app.crawler import JiraCrawler, derive_issue_deltas, iter_snapshot_dates, reconstruct_snapshot_issues
+
+        resolved_from = request.date_from or request.snapshot_date or date.today().isoformat()
+        resolved_to = request.date_to or request.snapshot_date or resolved_from
+        snapshot_dates = iter_snapshot_dates(resolved_from, resolved_to)
+        result = JiraCrawler(config.jira).crawl(resolved_to)
+        repo.save_change_events(result.change_events)
+        previous_date = repo.get_previous_snapshot_date(resolved_from)
+        previous_snapshot: list = repo.load_snapshot(previous_date) if previous_date else []
+        for current_date in snapshot_dates:
+            snapshot_issues = reconstruct_snapshot_issues(result.issues, result.change_events, current_date)
+            deltas = derive_issue_deltas(snapshot_issues, previous_snapshot)
+            repo.save_daily_snapshot(current_date, snapshot_issues)
+            repo.save_deltas(current_date, deltas)
+            previous_snapshot = snapshot_issues
+        repo.update_run(run_id, "success", f"Backfilled snapshots for {resolved_from}..{resolved_to}")
     except Exception as exc:
         repo.update_run(run_id, "failed", str(exc))
 
@@ -212,8 +227,8 @@ def create_full_sync_task(
     background_tasks: BackgroundTasks,
 ) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
-    snapshot_date = payload.snapshot_date or date.today().isoformat()
-    run_id = repo.create_run("full-sync", snapshot_date, "queued")
+    run_label = payload.snapshot_date or f"{payload.date_from or date.today().isoformat()}..{payload.date_to or payload.date_from or date.today().isoformat()}"
+    run_id = repo.create_run("full-sync", run_label, "queued")
     background_tasks.add_task(_run_full_sync, run_id, payload)
     return {"id": run_id, "status": "queued"}
 
@@ -422,6 +437,7 @@ def post_jira_docs_qa(payload: JiraDocsQuestionPayload) -> dict:
     result = answer_jira_docs_question(
         config,
         BM25Index(filter_product_doc_chunks(repo.load_doc_chunks())),
+        BM25Index(filter_jira_doc_chunks(repo.load_doc_chunks())),
         payload.question,
         issues,
         issue_analyses,
