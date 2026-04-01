@@ -61,3 +61,4 @@ def test_fallback_issue_deep_analysis_groups_spec_and_policy_hits():
     assert result.next_actions
     assert result.open_questions
     assert result.citations
+    assert any("fix version" in item.lower() for item in result.open_questions)

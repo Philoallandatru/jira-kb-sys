@@ -8,6 +8,7 @@ import shutil
 
 from app.analysis import analyze_daily_report
 from app.config import AppConfig, load_config
+from app.confluence import ConfluenceCrawler
 from app.crawler import JiraCrawler, derive_issue_deltas, iter_snapshot_dates, reconstruct_snapshot_issues
 from app.demo import build_demo_chunks, build_demo_issues
 from app.docs import BM25Index, DocumentConverter
@@ -91,19 +92,37 @@ def build_docs(config_path: str | None = None) -> None:
     config, repo = _bootstrap(config_path)
     run_id = repo.create_run("build-docs", date.today().isoformat(), "running")
     try:
-        _, product_chunks = DocumentConverter(config.docs).build_documents()
+        converter = DocumentConverter(config.docs)
+        confluence_documents = []
+        if config.confluence.base_url and config.confluence.space_keys:
+            confluence_documents = ConfluenceCrawler(config.confluence, config.docs).crawl_documents()
+        _, local_chunks = converter.build_documents()
+        confluence_chunks = converter.build_chunks_from_documents(confluence_documents)
         jira_chunks = build_jira_chunks(repo, config.docs)
-        all_chunks = product_chunks + jira_chunks
+        all_chunks = local_chunks + confluence_chunks + jira_chunks
         repo.save_doc_chunks(all_chunks)
         repo.update_run(
             run_id,
             "success",
-            f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)",
+            (
+                f"Indexed {len(all_chunks)} chunks "
+                f"({len(local_chunks)} local + {len(confluence_chunks)} confluence + {len(jira_chunks)} jira)"
+            ),
         )
-        print(f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)")
+        print(
+            f"Indexed {len(all_chunks)} chunks "
+            f"({len(local_chunks)} local + {len(confluence_chunks)} confluence + {len(jira_chunks)} jira)"
+        )
     except Exception as exc:
         repo.update_run(run_id, "failed", str(exc))
         raise
+
+
+def sync_confluence(config_path: str | None = None) -> None:
+    config, _ = _bootstrap(config_path)
+    crawler = ConfluenceCrawler(config.confluence, config.docs)
+    documents = crawler.crawl_documents()
+    print(json.dumps({"document_count": len(documents)}, ensure_ascii=False, indent=2))
 
 
 def report(report_date: str | None = None, config_path: str | None = None) -> None:
@@ -246,6 +265,7 @@ def main() -> None:
     full_sync_parser.add_argument("--date-from", dest="date_from", default=None)
     full_sync_parser.add_argument("--date-to", dest="date_to", default=None)
     subparsers.add_parser("build-docs")
+    subparsers.add_parser("sync-confluence")
     subparsers.add_parser("seed-demo")
     import_parser = subparsers.add_parser("import-file")
     import_parser.add_argument("source_path")
@@ -274,6 +294,8 @@ def main() -> None:
             full_sync(snapshot_date=args.snapshot_date, config_path=args.config_path)
     elif args.command == "build-docs":
         build_docs(config_path=args.config_path)
+    elif args.command == "sync-confluence":
+        sync_confluence(config_path=args.config_path)
     elif args.command == "seed-demo":
         seed_demo(config_path=args.config_path)
     elif args.command == "import-file":

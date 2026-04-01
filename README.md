@@ -1,122 +1,99 @@
-# Jira Summary 系统
+# Jira Summary
 
-一个面向 Jira 日报、管理摘要、知识检索和本地 AI 分析的中文系统。
+Jira Summary is a local-first Jira reporting and knowledge retrieval system. It collects Jira snapshots, stores derived history in SQLite, indexes local documents and Confluence pages into retrievable chunks, and uses an OpenAI-compatible model to generate daily reports, management summaries, issue deep analysis, and QA responses.
 
-当前仓库已经具备这些主能力：
+## Current Capabilities
 
-- 从 Jira 拉取快照并保存到 SQLite
-- 持久化 Jira changelog 事件与派生 delta
-- 将本地 `PDF / PPTX / XLSX / DOCX / Markdown` 转成统一知识 chunks
-- 将 Jira 快照、单 Jira AI 分析、日报 AI 分析一并写入统一知识库
-- 生成日报、管理层摘要、单 Jira 深度分析
-- 提供 Docs QA 与 Jira + Docs 联合问答
-- 提供 FastAPI 后端、Next.js 前端和 CLI
-- 提供持久化任务队列和应用内 worker
+- Crawl Jira snapshots and changelog events into SQLite
+- Backfill historical snapshots by replaying changelog data
+- Convert local `PDF / PPTX / XLSX / DOCX / Markdown` sources into chunks
+- Crawl Confluence Server pages by space using Basic + Token auth
+- Build Jira issue knowledge chunks alongside product and Confluence docs
+- Run Docs QA and Jira + Docs QA with BM25 retrieval
+- Generate daily reports, management summaries, and issue deep analysis
+- Expose FastAPI endpoints, CLI commands, a task queue, and a Next.js frontend
 
-## 当前功能
+## Data Flow
 
-### Jira 数据链路
+### Jira
 
-- 每日快照保存到 `issues_daily_snapshot`
-- 当前最新状态保存到 `issues_current`
-- 派生 delta 保存到 `issue_events_derived`
-- 原始 changelog 事件保存到 `issue_change_events`
-- 支持基于 changelog 的日期区间 full-sync / backfill
+- `issues_daily_snapshot`: per-day snapshot records
+- `issues_current`: latest issue state
+- `issue_events_derived`: snapshot-to-snapshot deltas
+- `issue_change_events`: raw changelog-derived events
 
-### AI 与知识库
+### Documents
 
-- 产品文档 chunks 写入 `doc_chunks`
-- Jira knowledge chunks 也写入 `doc_chunks`
-- Docs QA 只检索产品文档 chunks
-- Jira + Docs QA 混合检索产品文档 chunks 与 Jira knowledge chunks
+All retrievable knowledge is written into `doc_chunks`, including:
 
-Jira knowledge 的 source type：
+- local source documents with source types like `local_pdf`
+- Confluence pages with source type `confluence_page`
+- Jira knowledge with source types:
+  - `jira_issue`
+  - `jira_issue_analysis`
+  - `jira_daily_analysis`
 
-- `jira_issue`
-- `jira_issue_analysis`
-- `jira_daily_analysis`
+## Structured Jira Fields
 
-### 任务系统
+Issue records now persist both standard and structured fields, including:
 
-所有 API 任务都先入库，再由应用内 worker 拉取执行。
+- `issue_type`
+- `resolution`
+- `fix_versions`
+- `affects_versions`
+- `severity`
+- `report_department`
+- `root_cause`
+- `frequency`
+- `fail_runtime`
+- `description_fields`
+- `activity_comments`
+- `activity_all`
+- `issue_links`
+- `mentioned_in_links`
+- `blocks_links`
+- `raw_fields`
 
-已持久化的任务字段包括：
+`description_fields` is populated from ADF tables first, then key/value text, then raw description fallback.
 
-- `payload_json`
-- `attempt_count`
-- `last_error`
-- `started_at`
-- `finished_at`
+## Configuration
 
-当前行为：
+Example `config.yaml` sections:
 
-- 新任务先进入 `queued`
-- worker 按顺序 claim 任务并执行
-- 进程异常中断后，启动时会把残留的 `running` 任务回收到 `queued`
-- 运行失败会自动重试，默认最多 3 次
+```yaml
+jira:
+  base_url: "https://jira.example.com"
+  access_token: ""
+  project_filters:
+    - name: "default"
+      url: "https://jira.example.com/issues/?jql=project%20%3D%20SSD"
+  jql: ""
+  max_results: 200
+  timeout_seconds: 45
+  field_mapping:
+    severity: "customfield_10010"
+    root_cause: "customfield_10011"
+    platform_name: "customfield_10012"
+    script_name: "customfield_10013"
 
-### 前端页面
-
-当前已接入：
-
-- `/`
-- `/dashboard`
-- `/reports`
-- `/management-summary`
-- `/issues`
-- `/docs-qa`
-- `/jira-docs-qa`
-- `/tasks`
-- `/settings`
-
-## 环境变量
-
-最常用的环境变量只有两个：
-
-- `PYTHONPATH`
-- `NEXT_PUBLIC_API_BASE_URL`
-
-后端本地跨域设置来自 `config.yaml` 里的：
-
-- `server.cors_allow_origins`
-- `server.cors_allow_credentials`
-
-### Windows PowerShell
-
-只对当前终端会话生效：
-
-```powershell
-$env:PYTHONPATH='.'
-$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+confluence:
+  base_url: "https://confluence.example.com"
+  username: "user@example.com"
+  access_token: ""
+  crawl_mode: "space"
+  space_keys: ["SSD"]
+  root_page_urls: []
+  page_limit: 500
+  page_size: 50
+  timeout_seconds: 45
 ```
 
-如果要写入用户级环境变量：
+Notes:
 
-```powershell
-setx PYTHONPATH "."
-setx NEXT_PUBLIC_API_BASE_URL "http://127.0.0.1:8000"
-```
+- Jira custom fields should be configured by real `customfield_xxxxx` ids.
+- Confluence currently crawls configured spaces and optionally filters by configured root page URLs.
 
-注意：`setx` 只对新开的终端生效。
-
-### Linux / bash
-
-只对当前 shell 会话生效：
-
-```bash
-export PYTHONPATH=.
-export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-```
-
-如果要长期生效，可以写入 `~/.bashrc` 或 `~/.zshrc`：
-
-```bash
-echo 'export PYTHONPATH=.' >> ~/.bashrc
-echo 'export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000' >> ~/.bashrc
-source ~/.bashrc
-```
-
-## 常用命令
+## Common Commands
 
 ### Windows PowerShell
 
@@ -124,13 +101,13 @@ source ~/.bashrc
 $env:PYTHONPATH='.'
 python -m app.cli incremental-sync
 python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+python -m app.cli sync-confluence
 python -m app.cli build-docs
 python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
-python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
+python -m app.cli ask "Which Jira item is blocked by reset ordering validation?"
 uvicorn app.api:app --reload
-streamlit run app/ui.py
 ```
 
 ### Linux / bash
@@ -139,47 +116,27 @@ streamlit run app/ui.py
 export PYTHONPATH=.
 python -m app.cli incremental-sync
 python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+python -m app.cli sync-confluence
 python -m app.cli build-docs
 python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
-python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
+python -m app.cli ask "Which Jira item is blocked by reset ordering validation?"
 uvicorn app.api:app --reload
-streamlit run app/ui.py
 ```
 
-### 前端开发
-
-Windows PowerShell：
-
-```powershell
-cd frontend
-npm install
-$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
-npm run dev
-```
-
-Linux / bash：
-
-```bash
-cd frontend
-npm install
-export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-npm run dev
-```
-
-## FastAPI 接口
-
-核心接口包括：
+## FastAPI Endpoints
 
 - `GET /health`
 - `GET /integrations/jira/health`
+- `GET /integrations/confluence/health`
 - `GET /dashboard/overview`
 - `GET /reports/daily`
 - `GET /reports/daily/{report_date}`
 - `POST /tasks/reports/management-summary`
 - `POST /tasks/sync/incremental`
 - `POST /tasks/sync/full`
+- `POST /tasks/sync/confluence`
 - `POST /tasks/crawl`
 - `POST /tasks/build-docs`
 - `POST /tasks/analyze`
@@ -195,62 +152,37 @@ npm run dev
 - `GET /settings/prompts`
 - `PUT /settings/prompts`
 
-## 配置示例
+## Frontend Routes
 
-`config.yaml`
+- `/dashboard`
+- `/reports`
+- `/management-summary`
+- `/issues`
+- `/docs-qa`
+- `/jira-docs-qa`
+- `/tasks`
+- `/settings`
 
-```yaml
-jira:
-  base_url: "https://jira.example.com"
-  access_token: ""
-  project_filters:
-    - name: "default"
-      url: "https://jira.example.com/issues/?jql=project%20%3D%20SSD"
+## Validation
 
-llm:
-  base_url: "http://localhost:8000/v1"
-  api_key: "dummy"
-  model: "qwen3.5-35b"
-  timeout_seconds: 120
-  default_language: "zh-CN"
-  max_output_tokens: 4096
-  custom_prompts: {}
-  scenario_max_output_tokens:
-    daily_report: 4096
-    issue_deep_analysis: 6144
-    docs_qa: 4096
-    jira_docs_qa: 6144
-    management_summary: 6144
+### Windows PowerShell
+
+```powershell
+$env:PYTHONPATH='.'
+pytest -q
 ```
 
-## 主要目录
+### Linux / bash
 
-- [app](/E:/Code/AI/codex/pr-agent/jira-summary/app)
-  Python 后端、CLI、任务执行、AI 分析
-- [frontend](/E:/Code/AI/codex/pr-agent/jira-summary/frontend)
-  Next.js 独立前端
-- [docs](/E:/Code/AI/codex/pr-agent/jira-summary/docs)
-  架构、运行和差距说明
-- [tests](/E:/Code/AI/codex/pr-agent/jira-summary/tests)
-  回归测试
+```bash
+export PYTHONPATH=.
+pytest -q
+```
 
-## 前端 404 排查
+## Remaining Gaps
 
-如果任务页点击后显示 404，优先检查：
+- Full sync is still a historical reconstruction from current issues plus changelog, not a true historical snapshot source from Jira.
+- The task runner is still an in-process persistent worker, not a distributed queue.
+- Confluence root-page filtering works, but crawl behavior is still implemented as space pagination plus subtree filtering rather than a strict child-tree traversal from roots.
 
-1. 后端是不是最新代码并且已经重启。
-2. `NEXT_PUBLIC_API_BASE_URL` 是否是合法地址。
-3. 前端是否在修改环境变量后重新启动或重新构建。
-4. 任务页里的 `Check Jira Connection` 是否能正常返回结果。
-
-如果浏览器里看到类似 `//%3A/tasks/...` 这种 URL，通常是 `NEXT_PUBLIC_API_BASE_URL` 配错了。
-如果浏览器里看到 `OPTIONS /tasks/... 405` 或 `Network Error when attempting to fetch resource`，通常是后端 CORS 未生效，或者后端没有重启到最新版本。
-
-## 仍然存在的边界
-
-当前剩余的主要边界只有两类：
-
-1. full-sync 仍然是基于“当前 issue + changelog”的历史近似回放，不是 Jira 官方历史快照源。
-2. 任务系统已经是持久化队列，但仍是单进程应用内 worker，不是独立的分布式 worker / queue。
-
-更细的差距见 [docs/GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md)。
+See [GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md) for the broader gap list.

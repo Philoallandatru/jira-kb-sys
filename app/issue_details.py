@@ -28,21 +28,8 @@ def build_issue_deep_analysis(
 
     chunks = filter_product_doc_chunks(repo.load_doc_chunks())
     index = BM25Index(chunks)
-    related_hits = index.search(
-        " ".join(
-            filter(
-                None,
-                [
-                    issue.issue_key,
-                    issue.summary,
-                    issue.description or "",
-                    " ".join(issue.labels),
-                    " ".join(issue.components),
-                ],
-            )
-        ),
-        top_k=8,
-    )
+    issue_fact_sheet = _build_issue_fact_sheet(issue)
+    related_hits = index.search(_build_issue_query(issue), top_k=8)
     issue_analyses = {item.issue_key: item for item in repo.load_issue_analyses(resolved_snapshot)}
     related_issues = _related_issues(issue, repo.load_snapshot(resolved_snapshot), issue_analyses)
     try:
@@ -51,6 +38,7 @@ def build_issue_deep_analysis(
             prompt=json.dumps(
                 {
                     "issue": issue.to_dict(),
+                    "issue_fact_sheet": issue_fact_sheet,
                     "snapshot_date": resolved_snapshot,
                     "matched_documents": [_serialize_hit(hit) for hit in related_hits],
                     "related_issues": related_issues,
@@ -96,6 +84,7 @@ def _fallback_issue_deep_analysis(
     spec_relations = []
     policy_relations = []
     citations = []
+    fact_sheet = _build_issue_fact_sheet(issue)
     for hit in hits:
         category = _categorize_hit(hit)
         summary = f"{hit.chunk.doc_title} / {' / '.join(hit.chunk.section_path)}"
@@ -117,6 +106,8 @@ def _fallback_issue_deep_analysis(
         suspected.append(f"Existing issue analysis suggests root cause: {cached_analysis.suspected_root_cause}")
     if "block" in issue.status.lower():
         suspected.append("Current status still signals a blocker and should be cleared before broader rollout.")
+    if issue.severity and issue.severity.lower() in {"major", "highest", "high"} and not issue.root_cause:
+        suspected.append("Severity is elevated but root cause is still missing from the Jira record.")
     if not spec_relations:
         spec_relations.append("No strong spec evidence was retrieved from the local knowledge base.")
     if not policy_relations:
@@ -133,6 +124,10 @@ def _fallback_issue_deep_analysis(
         open_questions.append("Are the release gate and regression criteria for this high-priority issue explicit?")
     if not issue.description:
         open_questions.append("Should Jira be updated with reproduction steps, impact, and expected behavior?")
+    if not issue.fix_versions:
+        open_questions.append("Should a target fix version be assigned before this item remains in execution?")
+    if fact_sheet["platform"] or fact_sheet["script_name"]:
+        open_questions.append("Has the reported platform and script combination been reproduced independently?")
 
     return IssueDeepAnalysisResult(
         issue_key=issue.issue_key,
@@ -155,47 +150,43 @@ def _related_issues(
     issues: list[IssueRecord],
     issue_analyses: dict[str, IssueAIAnalysis],
 ) -> list[dict[str, str | list[str]]]:
-    current_tokens = set(
-        _tokenize(
-            " ".join(
-                filter(
-                    None,
-                    [issue.summary, issue.description or "", " ".join(issue.labels), " ".join(issue.components)],
-                )
-            )
-        )
-    )
+    current_tokens = set(_tokenize(_build_issue_query(issue)))
+    current_platform = (issue.description_fields.get("Platform Name") or "").lower()
+    current_script = (issue.description_fields.get("Script Name") or "").lower()
     scored = []
     for candidate in issues:
         if candidate.issue_key == issue.issue_key:
             continue
-        candidate_tokens = set(
-            _tokenize(
-                " ".join(
-                    filter(
-                        None,
-                        [
-                            candidate.summary,
-                            candidate.description or "",
-                            " ".join(candidate.labels),
-                            " ".join(candidate.components),
-                        ],
-                    )
-                )
-            )
-        )
+        candidate_tokens = set(_tokenize(_build_issue_query(candidate)))
         overlap = len(current_tokens & candidate_tokens)
-        if overlap == 0:
+        score = overlap
+        if set(issue.components) & set(candidate.components):
+            score += 4
+        if issue.root_cause and candidate.root_cause and issue.root_cause == candidate.root_cause:
+            score += 5
+        if current_platform and current_platform == (candidate.description_fields.get("Platform Name") or "").lower():
+            score += 4
+        if current_script and current_script == (candidate.description_fields.get("Script Name") or "").lower():
+            score += 3
+        if set(issue.affects_versions) & set(candidate.affects_versions):
+            score += 2
+        if set(issue.blocks_links) & set(candidate.blocks_links):
+            score += 3
+        if score == 0:
             continue
         analysis = issue_analyses.get(candidate.issue_key)
         scored.append(
             (
-                overlap,
+                score,
                 {
                     "issue_key": candidate.issue_key,
                     "summary": candidate.summary,
                     "status": candidate.status,
-                    "reason": f"token_overlap={overlap}",
+                    "reason": (
+                        f"score={score}; token_overlap={overlap}; "
+                        f"same_component={bool(set(issue.components) & set(candidate.components))}; "
+                        f"same_root_cause={bool(issue.root_cause and issue.root_cause == candidate.root_cause)}"
+                    ),
                     "actions": analysis.action_needed if analysis else [],
                 },
             )
@@ -269,3 +260,50 @@ def _ensure_citations(value: object, hits: list[SearchHit]) -> list[DeepAnalysis
 
 def _tokenize(text: str) -> list[str]:
     return [token for token in "".join(ch.lower() if ch.isalnum() else " " for ch in text).split() if token]
+
+
+def _build_issue_query(issue: IssueRecord) -> str:
+    values = [
+        issue.issue_key,
+        issue.summary,
+        issue.description or "",
+        issue.issue_type or "",
+        issue.severity or "",
+        issue.root_cause or "",
+        " ".join(issue.labels),
+        " ".join(issue.components),
+        " ".join(issue.fix_versions),
+        " ".join(issue.affects_versions),
+        " ".join(issue.issue_links),
+        " ".join(issue.blocks_links),
+        issue.description_fields.get("Platform Name", ""),
+        issue.description_fields.get("Script Name", ""),
+        issue.description_fields.get("Expect Result", ""),
+        issue.description_fields.get("Actual Result", ""),
+    ]
+    return " ".join(part for part in values if part)
+
+
+def _build_issue_fact_sheet(issue: IssueRecord) -> dict[str, object]:
+    return {
+        "issue_key": issue.issue_key,
+        "summary": issue.summary,
+        "type": issue.issue_type,
+        "status": issue.status,
+        "priority": issue.priority,
+        "severity": issue.severity,
+        "component": issue.components,
+        "root_cause": issue.root_cause,
+        "fix_versions": issue.fix_versions,
+        "affects_versions": issue.affects_versions,
+        "report_department": issue.report_department,
+        "platform": issue.description_fields.get("Platform Name"),
+        "script_name": issue.description_fields.get("Script Name"),
+        "firmware_version": issue.description_fields.get("Firmware Version"),
+        "expect_result": issue.description_fields.get("Expect Result"),
+        "actual_result": issue.description_fields.get("Actual Result"),
+        "test_step": issue.description_fields.get("Test step"),
+        "blocks_links": issue.blocks_links,
+        "mentioned_in_links": issue.mentioned_in_links,
+        "issue_links": issue.issue_links,
+    }

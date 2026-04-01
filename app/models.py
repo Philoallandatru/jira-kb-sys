@@ -29,6 +29,22 @@ class IssueRecord:
     description: str | None = None
     comments: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
+    issue_type: str | None = None
+    resolution: str | None = None
+    fix_versions: list[str] = field(default_factory=list)
+    affects_versions: list[str] = field(default_factory=list)
+    severity: str | None = None
+    report_department: str | None = None
+    root_cause: str | None = None
+    frequency: str | None = None
+    fail_runtime: str | None = None
+    description_fields: dict[str, str] = field(default_factory=dict)
+    activity_comments: list[str] = field(default_factory=list)
+    activity_all: list[str] = field(default_factory=list)
+    issue_links: list[str] = field(default_factory=list)
+    mentioned_in_links: list[str] = field(default_factory=list)
+    blocks_links: list[str] = field(default_factory=list)
+    raw_fields: dict[str, Any] = field(default_factory=dict)
     updated_at: str | None = None
     created_at: str | None = None
     source_filter: str | None = None
@@ -259,8 +275,15 @@ class ManagementSummaryMetrics:
     high_priority_open_count: int
     team_distribution: dict[str, int]
     status_distribution: dict[str, int]
+    issue_type_distribution: dict[str, int]
+    severity_distribution: dict[str, int]
+    root_cause_distribution: dict[str, int]
+    report_department_distribution: dict[str, int]
+    component_distribution: dict[str, int]
     issues_without_owner: int
     issues_without_root_cause: int
+    issues_without_fix_version: int
+    issues_without_repro_context: int
     referenced_issue_keys: list[str]
 
     def to_dict(self) -> dict[str, Any]:

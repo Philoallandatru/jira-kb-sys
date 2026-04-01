@@ -1,105 +1,101 @@
-# 运行手册
+# Runbook
 
-## 环境要求
+## Requirements
 
 - Python 3.10+
 - Node.js 20+
-- 本地 OpenAI-compatible 模型服务
+- An OpenAI-compatible chat completion endpoint
+- Jira access token
+- Confluence Server username + token if Confluence crawling is enabled
 
-主要依赖：
+Primary Python dependencies:
 
 - `jira`
+- `atlassian-python-api`
 - `markitdown`
 - `fastapi`
 - `uvicorn`
 - `streamlit`
 - `weasyprint`
 
-## 环境变量
-
-后端本地跨域设置来自 `config.yaml`：
-
-```yaml
-server:
-  cors_allow_origins:
-    - "http://localhost:3000"
-    - "http://127.0.0.1:3000"
-  cors_allow_credentials: true
-```
-
-如果你的前端不是从这两个地址打开，需要把实际前端地址加进去，再重启后端。
-
-后端跨域设置放在 `config.yaml`：
-
-```yaml
-server:
-  cors_allow_origins:
-    - "http://localhost:3000"
-    - "http://127.0.0.1:3000"
-  cors_allow_credentials: true
-```
-
-如果前端不在这两个地址，需要把实际前端 origin 加进去，然后重启后端。
+## Environment Setup
 
 ### Windows PowerShell
-
-当前会话：
 
 ```powershell
 $env:PYTHONPATH='.'
 $env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
 ```
 
-持久化到用户环境：
-
-```powershell
-setx PYTHONPATH "."
-setx NEXT_PUBLIC_API_BASE_URL "http://127.0.0.1:8000"
-```
-
 ### Linux / bash
-
-当前会话：
 
 ```bash
 export PYTHONPATH=.
 export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-持久化到 `~/.bashrc`：
+If the frontend runs on another origin, update `server.cors_allow_origins` in `config.yaml` and restart the API.
 
-```bash
-echo 'export PYTHONPATH=.' >> ~/.bashrc
-echo 'export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000' >> ~/.bashrc
-source ~/.bashrc
+## Key Config Sections
+
+### Jira
+
+- `jira.base_url`
+- `jira.access_token`
+- `jira.project_filters` or `jira.jql`
+- `jira.field_mapping.*`
+
+Use real Jira field ids for `jira.field_mapping`, for example:
+
+```yaml
+jira:
+  field_mapping:
+    severity: "customfield_10010"
+    root_cause: "customfield_10011"
+    platform_name: "customfield_10012"
 ```
 
-## 启动后端
+### Confluence
 
-### Windows PowerShell
+```yaml
+confluence:
+  base_url: "https://confluence.example.com"
+  username: "user@example.com"
+  access_token: ""
+  crawl_mode: "space"
+  space_keys: ["SSD"]
+  root_page_urls: []
+```
+
+## Start Services
+
+### API
+
+#### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
 uvicorn app.api:app --reload
 ```
 
-### Linux / bash
+#### Linux / bash
 
 ```bash
 export PYTHONPATH=.
 uvicorn app.api:app --reload
 ```
 
-健康检查：
+Health checks:
 
 ```bash
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/integrations/jira/health
+curl http://127.0.0.1:8000/integrations/confluence/health
 ```
 
-## 启动独立前端
+### Frontend
 
-### Windows PowerShell
+#### Windows PowerShell
 
 ```powershell
 cd frontend
@@ -108,7 +104,7 @@ $env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
 npm run dev
 ```
 
-### Linux / bash
+#### Linux / bash
 
 ```bash
 cd frontend
@@ -117,155 +113,125 @@ export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
-## 启动 Streamlit 运维台
+### Streamlit UI
 
-### Windows PowerShell
+#### Windows PowerShell
 
 ```powershell
 $env:PYTHONPATH='.'
 streamlit run app/ui.py
 ```
 
-### Linux / bash
+#### Linux / bash
 
 ```bash
 export PYTHONPATH=.
 streamlit run app/ui.py
 ```
 
-## 常用 CLI
+## Common CLI Workflows
 
-### Windows PowerShell
-
-```powershell
-$env:PYTHONPATH='.'
-python -m app.cli incremental-sync
-python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
-python -m app.cli build-docs
-python -m app.cli analyze --date 2026-03-31
-python -m app.cli report --date 2026-03-31
-python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
-```
-
-### Linux / bash
+### Incremental Jira Sync
 
 ```bash
-export PYTHONPATH=.
 python -m app.cli incremental-sync
-python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
-python -m app.cli build-docs
-python -m app.cli analyze --date 2026-03-31
-python -m app.cli report --date 2026-03-31
-python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
 ```
 
-## 常用 API
+### Historical Backfill
 
-### 系统与集成
+```bash
+python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+```
 
-- `GET /health`
-- `GET /integrations/jira/health`
+### Confluence Crawl
 
-### Dashboard
+```bash
+python -m app.cli sync-confluence
+```
 
-- `GET /dashboard/overview`
+### Build Retrieval Index
 
-### Daily Reports
+```bash
+python -m app.cli build-docs
+```
 
-- `GET /reports/daily`
-- `GET /reports/daily/{report_date}`
+`build-docs` now indexes:
 
-### Management Summary
+- local documents
+- Confluence pages
+- Jira knowledge chunks
 
-- `POST /tasks/reports/management-summary`
-- `GET /reports/management-summary/{run_id}`
+### Analysis and Reports
 
-### Tasks
+```bash
+python -m app.cli analyze --date 2026-03-31
+python -m app.cli report --date 2026-03-31
+python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV
+```
+
+## Common API Tasks
 
 - `POST /tasks/sync/incremental`
 - `POST /tasks/sync/full`
-- `POST /tasks/crawl`
+- `POST /tasks/sync/confluence`
 - `POST /tasks/build-docs`
 - `POST /tasks/analyze`
 - `POST /tasks/report`
-- `GET /tasks`
-- `GET /tasks/{run_id}`
+- `POST /tasks/reports/management-summary`
 
-### Issues
+Task execution is persisted in the `runs` table and retried automatically up to the configured in-process limit.
 
-- `GET /issues`
-- `GET /issues/{issue_key}`
-- `GET /issues/{issue_key}/deep-analysis`
+## Validation
 
-### QA
+### Python
 
-- `POST /qa/docs`
-- `POST /qa/jira-docs`
-
-### Prompt Settings
-
-- `GET /settings/prompts`
-- `PUT /settings/prompts`
-
-## 测试与验证
-
-### Windows PowerShell
-
-```powershell
-$env:PYTHONPATH='.'
-pytest tests
+```bash
+pytest -q
 python -m compileall app
+```
+
+### Frontend
+
+```bash
 cd frontend
 npm run build
 ```
 
-### Linux / bash
+## Troubleshooting
 
-```bash
-export PYTHONPATH=.
-pytest tests
-python -m compileall app
-cd frontend
-npm run build
-```
+### `ModuleNotFoundError: No module named 'app'`
 
-## 常见问题
+Set `PYTHONPATH=.`
 
-### 1. `pytest` 找不到 `app`
+### Jira health check fails
 
-Windows PowerShell：
+Validate:
 
-```powershell
-$env:PYTHONPATH='.'
-```
+- `jira.base_url`
+- `jira.access_token`
+- the configured JQL or filter URLs
 
-Linux / bash：
+### Confluence health check fails
 
-```bash
-export PYTHONPATH=.
-```
+Validate:
 
-### 2. 管理层摘要没有 PDF
+- `confluence.base_url`
+- `confluence.username`
+- `confluence.access_token`
+- `confluence.space_keys`
 
-通常是 `weasyprint` 不可用。Markdown、JSON、HTML 仍会正常生成。
+### Docs QA returns weak evidence
 
-### 3. 前端页面能打开，但请求失败
+Make sure you ran:
 
-优先检查：
+1. Jira sync
+2. Confluence sync if needed
+3. `build-docs`
 
-- `uvicorn app.api:app --reload` 是否已启动
-- `NEXT_PUBLIC_API_BASE_URL` 是否正确
-- 修改前端环境变量后是否重新启动前端
-- `GET /integrations/jira/health` 是否可访问
+### Issue deep analysis lacks structured context
 
-如果浏览器里看到 `//%3A/tasks/...` 这类 URL，说明前端 API base URL 配错了。
-如果浏览器里看到 `OPTIONS /tasks/... 405`，说明 CORS 预检没有通过，通常是后端没有重启到带 CORS 中间件的新版本，或者 `server.cors_allow_origins` 没包含当前前端地址。
-如果浏览器里看到 `OPTIONS /tasks/... 405`，说明后端还没启用最新 CORS 配置，或者修改后没有重启。
+Check:
 
-### 4. 单 Jira 深度分析为空
-
-优先检查：
-
-- 是否已经执行过 `incremental-sync` 或 `crawl`
-- 是否已经执行过 `build-docs`
-- 本地知识库是否包含 spec / policy / design 文档
+- `jira.field_mapping` is populated with real field ids
+- Jira descriptions actually contain ADF tables or key/value reproduction fields
+- snapshots were rebuilt after field mapping changes

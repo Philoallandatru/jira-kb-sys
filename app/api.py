@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.analysis import analyze_daily_report
 from app.cli import _bootstrap
+from app.confluence import ConfluenceCrawler, ConfluenceError
 from app.crawler import CrawlerError, JiraCrawler
 from app.docs import BM25Index, DocumentConverter
 from app.issue_details import build_issue_deep_analysis
@@ -102,6 +103,15 @@ class JiraConnectionResponse(BaseModel):
     has_jql: bool
 
 
+class ConfluenceConnectionResponse(BaseModel):
+    ok: bool
+    base_url: str
+    authenticated_user: str | None = None
+    crawl_mode: str
+    space_keys: list[str]
+    sample_spaces: list[str] = Field(default_factory=list)
+
+
 def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) -> None:
     config, repo = _bootstrap(request.config_path)
     summary_request = ManagementSummaryRequest(
@@ -161,15 +171,29 @@ def _run_crawl(run_id: int, request: SimpleTaskRequest) -> None:
 
 def _run_build_docs(run_id: int, request: SimpleTaskRequest) -> None:
     config, repo = _bootstrap(request.config_path)
-    _, product_chunks = DocumentConverter(config.docs).build_documents()
+    converter = DocumentConverter(config.docs)
+    confluence_documents = []
+    if config.confluence.base_url and config.confluence.space_keys:
+        confluence_documents = ConfluenceCrawler(config.confluence, config.docs).crawl_documents()
+    _, product_chunks = converter.build_documents()
+    confluence_chunks = converter.build_chunks_from_documents(confluence_documents)
     jira_chunks = build_jira_chunks(repo, config.docs)
-    all_chunks = product_chunks + jira_chunks
+    all_chunks = product_chunks + confluence_chunks + jira_chunks
     repo.save_doc_chunks(all_chunks)
     repo.update_run(
         run_id,
         "success",
-        f"Indexed {len(all_chunks)} chunks ({len(product_chunks)} docs + {len(jira_chunks)} jira)",
+        (
+            f"Indexed {len(all_chunks)} chunks "
+            f"({len(product_chunks)} local + {len(confluence_chunks)} confluence + {len(jira_chunks)} jira)"
+        ),
     )
+
+
+def _run_confluence_sync(run_id: int, request: SimpleTaskRequest) -> None:
+    config, repo = _bootstrap(request.config_path)
+    documents = ConfluenceCrawler(config.confluence, config.docs).crawl_documents()
+    repo.update_run(run_id, "success", f"Fetched {len(documents)} Confluence pages")
 
 
 def _run_analyze(run_id: int, request: DailyTaskRequest) -> None:
@@ -236,6 +260,7 @@ def _execute_queued_run(run_id: int, run_type: str, payload_json: str | None, re
         "management-summary": (ManagementSummaryTaskRequest, _run_management_summary),
         "incremental-sync": (SyncTaskRequest, _run_incremental_sync),
         "full-sync": (SyncTaskRequest, _run_full_sync),
+        "confluence-sync": (SimpleTaskRequest, _run_confluence_sync),
         "crawl": (SimpleTaskRequest, _run_crawl),
         "build-docs": (SimpleTaskRequest, _run_build_docs),
         "analyze": (DailyTaskRequest, _run_analyze),
@@ -276,6 +301,24 @@ def get_jira_connection_health(config_path: str | None = None) -> dict[str, obje
         ) from exc
 
 
+@app.get("/integrations/confluence/health")
+def get_confluence_connection_health(config_path: str | None = None) -> dict[str, object]:
+    config, _ = _bootstrap(config_path)
+    try:
+        return ConfluenceConnectionResponse.model_validate(
+            ConfluenceCrawler(config.confluence, config.docs).check_connection()
+        ).model_dump()
+    except ConfluenceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ok": False,
+                "base_url": config.confluence.base_url,
+                "message": str(exc),
+            },
+        ) from exc
+
+
 @app.post("/tasks/reports/management-summary")
 def create_management_summary_task(
     payload: ManagementSummaryTaskRequest,
@@ -310,6 +353,13 @@ def create_crawl_task(payload: SimpleTaskRequest) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     snapshot_date = date.today().isoformat()
     run_id = repo.create_run("crawl", snapshot_date, "queued", payload=payload.model_dump())
+    return {"id": run_id, "status": "queued"}
+
+
+@app.post("/tasks/sync/confluence")
+def create_confluence_sync_task(payload: SimpleTaskRequest) -> dict[str, int | str]:
+    _, repo = _bootstrap(payload.config_path)
+    run_id = repo.create_run("confluence-sync", date.today().isoformat(), "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
 
 
