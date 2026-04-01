@@ -16,6 +16,10 @@ def test_build_jira_chunks_emits_issue_issue_analysis_and_daily_analysis(tmp_pat
                 team="SV",
                 priority="High",
                 description="Controller sometimes times out during recovery.",
+                issue_type="FW Bug",
+                severity="Major",
+                root_cause="Queue ordering not restored",
+                description_fields={"Platform Name": "Pine", "Script Name": "repro.py"},
             )
         ],
     )
@@ -59,6 +63,7 @@ def test_build_jira_chunks_emits_issue_issue_analysis_and_daily_analysis(tmp_pat
     assert "jira_issue" in source_types
     assert "jira_issue_analysis" in source_types
     assert "jira_daily_analysis" in source_types
+    assert any("pine" in chunk.tags for chunk in chunks)
 
 
 def test_filter_product_doc_chunks_excludes_jira_prefix():

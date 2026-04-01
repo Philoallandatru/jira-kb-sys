@@ -199,11 +199,21 @@ def _select_relevant_issues(
                 [
                     issue.issue_key,
                     issue.summary,
+                    issue.issue_type or "",
                     issue.status,
+                    issue.severity or "",
+                    issue.root_cause or "",
                     issue.assignee or "",
                     issue.description or "",
                     " ".join(issue.labels),
                     " ".join(issue.components),
+                    " ".join(issue.fix_versions),
+                    " ".join(issue.affects_versions),
+                    issue.description_fields.get("Platform Name", ""),
+                    issue.description_fields.get("Script Name", ""),
+                    issue.description_fields.get("Expect Result", ""),
+                    issue.description_fields.get("Actual Result", ""),
+                    " ".join(issue.blocks_links),
                 ],
             )
         )
@@ -214,8 +224,12 @@ def _select_relevant_issues(
             score += 5
         if (issue.priority or "").lower() in {"high", "highest", "critical", "p0", "p1"}:
             score += 2
+        if (issue.severity or "").lower() in {"major", "high", "highest"}:
+            score += 2
         if "block" in issue.status.lower():
             score += 2
+        if issue.root_cause and issue.root_cause.lower() in question.lower():
+            score += 3
         analysis = analysis_map.get(issue.issue_key)
         reason = f"token_overlap={overlap}"
         if analysis:
@@ -230,6 +244,7 @@ def _select_relevant_issues(
                         "status": issue.status,
                         "team": issue.team,
                         "priority": issue.priority,
+                        "severity": issue.severity,
                         "assignee": issue.assignee,
                         "reason": reason,
                         "ai_root_cause": analysis.suspected_root_cause if analysis else "",

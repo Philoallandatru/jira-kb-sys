@@ -13,12 +13,44 @@ class JiraFilter(BaseModel):
     url: str
 
 
+class JiraFieldMapping(BaseModel):
+    issue_type: str | None = None
+    severity: str | None = None
+    report_department: str | None = None
+    root_cause: str | None = None
+    frequency: str | None = None
+    fail_runtime: str | None = None
+    firmware_version: str | None = None
+    density: str | None = None
+    form_factor: str | None = None
+    platform_name: str | None = None
+    script_name: str | None = None
+    test_step: str | None = None
+    expect_result: str | None = None
+    actual_result: str | None = None
+    activity_comment: str | None = None
+    activity_all: str | None = None
+
+
 class JiraConfig(BaseModel):
     base_url: str
     access_token: str = ""
     project_filters: list[JiraFilter] = Field(default_factory=list)
     jql: str = ""
     max_results: int = 200
+    timeout_seconds: int = 45
+    field_mapping: JiraFieldMapping = Field(default_factory=JiraFieldMapping)
+
+
+class ConfluenceConfig(BaseModel):
+    base_url: str = ""
+    username: str = ""
+    access_token: str = ""
+    crawl_mode: str = "space"
+    space_keys: list[str] = Field(default_factory=list)
+    root_page_urls: list[str] = Field(default_factory=list)
+    page_limit: int = 500
+    page_size: int = 50
     timeout_seconds: int = 45
 
 
@@ -67,6 +99,7 @@ class ServerConfig(BaseModel):
 
 class AppConfig(BaseModel):
     jira: JiraConfig
+    confluence: ConfluenceConfig = Field(default_factory=ConfluenceConfig)
     docs: DocsConfig
     storage: StorageConfig
     llm: LLMConfig
@@ -78,6 +111,7 @@ class EnvSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="JIRA_SUMMARY_", env_nested_delimiter="__")
     config: str = "./config.yaml"
     jira: dict[str, Any] = Field(default_factory=dict)
+    confluence: dict[str, Any] = Field(default_factory=dict)
     docs: dict[str, Any] = Field(default_factory=dict)
     storage: dict[str, Any] = Field(default_factory=dict)
     llm: dict[str, Any] = Field(default_factory=dict)
@@ -103,6 +137,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
         data,
         {
             "jira": env.jira,
+            "confluence": env.confluence,
             "docs": env.docs,
             "storage": env.storage,
             "llm": env.llm,

@@ -168,28 +168,54 @@ def _build_metrics(issues: list[IssueRecord], deltas: list[IssueDelta]) -> Manag
     referenced_issue_keys = [issue.issue_key for issue in issues[:10]]
     team_distribution = Counter((issue.team or "UNKNOWN") for issue in issues)
     status_distribution = Counter(issue.status for issue in issues)
+    issue_type_distribution = Counter((issue.issue_type or "UNKNOWN") for issue in issues)
+    severity_distribution = Counter((issue.severity or "UNKNOWN") for issue in issues)
+    root_cause_distribution = Counter((issue.root_cause or "UNKNOWN") for issue in issues)
+    report_department_distribution = Counter((issue.report_department or "UNKNOWN") for issue in issues)
+    component_distribution = Counter(component for issue in issues for component in (issue.components or ["UNKNOWN"]))
     issues_without_root_cause = 0
+    issues_without_fix_version = 0
+    issues_without_repro_context = 0
     for issue in issues:
         haystack = " ".join([issue.summary or "", issue.description or "", " ".join(issue.comments)])
         if "root cause" not in haystack.lower() and "根因" not in haystack:
             issues_without_root_cause += 1
+        if not issue.fix_versions:
+            issues_without_fix_version += 1
+        if not (
+            issue.description_fields.get("Platform Name")
+            or issue.description_fields.get("Script Name")
+            or issue.description_fields.get("Expect Result")
+            or issue.description_fields.get("Actual Result")
+        ):
+            issues_without_repro_context += 1
     return ManagementSummaryMetrics(
         updated_issue_count=len(issues),
         status_progress_count=sum(1 for delta in recent_deltas if delta.change_type == "status_changed"),
         closed_count=sum(1 for delta in recent_deltas if delta.change_type == "closed"),
         reopened_count=sum(1 for delta in recent_deltas if delta.change_type == "reopened"),
         assignee_change_count=sum(1 for delta in recent_deltas if delta.change_type == "assignee_changed"),
-        blocked_count=sum(1 for issue in issues if "block" in issue.status.lower()),
+        blocked_count=sum(1 for issue in issues if "block" in issue.status.lower() or issue.blocks_links),
         high_priority_open_count=sum(
             1
             for issue in issues
-            if (issue.priority or "").lower() in {"highest", "high", "critical", "p0", "p1"}
+            if (
+                (issue.priority or "").lower() in {"highest", "high", "critical", "p0", "p1"}
+                or (issue.severity or "").lower() in {"highest", "high", "major"}
+            )
             and issue.status.lower() not in {"done", "closed", "resolved"}
         ),
         team_distribution=dict(team_distribution),
         status_distribution=dict(status_distribution),
+        issue_type_distribution=dict(issue_type_distribution),
+        severity_distribution=dict(severity_distribution),
+        root_cause_distribution=dict(root_cause_distribution),
+        report_department_distribution=dict(report_department_distribution),
+        component_distribution=dict(component_distribution),
         issues_without_owner=sum(1 for issue in issues if not issue.assignee),
         issues_without_root_cause=issues_without_root_cause,
+        issues_without_fix_version=issues_without_fix_version,
+        issues_without_repro_context=issues_without_repro_context,
         referenced_issue_keys=referenced_issue_keys,
     )
 
@@ -308,6 +334,8 @@ def _referenced_metrics(metrics: ManagementSummaryMetrics) -> dict[str, int | fl
         "high_priority_open_count": metrics.high_priority_open_count,
         "issues_without_owner": metrics.issues_without_owner,
         "issues_without_root_cause": metrics.issues_without_root_cause,
+        "issues_without_fix_version": metrics.issues_without_fix_version,
+        "issues_without_repro_context": metrics.issues_without_repro_context,
     }
 
 

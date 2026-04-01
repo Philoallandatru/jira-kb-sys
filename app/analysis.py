@@ -54,7 +54,7 @@ def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index
             issue = issue_map.get(item.issue_key)
             if not issue:
                 continue
-            query = " ".join(filter(None, [issue.issue_key, issue.summary, issue.description or "", " ".join(issue.labels), " ".join(issue.components)]))
+            query = _build_issue_query(issue)
             hits = knowledge_index.search(query, top_k=5)
             analysis = _analyze_issue(client, report.report_date, issue, hits)
             issue_analyses.append(analysis)
@@ -84,6 +84,7 @@ def _analyze_issue(client: LLMClient, report_date: str, issue: IssueRecord, hits
         prompt=json.dumps(
             {
                 "issue": issue.to_dict(),
+                "issue_fact_sheet": _issue_fact_sheet(issue),
                 "knowledge_hits": [
                     {
                         "score": hit.score,
@@ -132,7 +133,7 @@ def _fallback_daily_analysis(report: DailyReport, knowledge_index: BM25Index, is
         if not issue:
             continue
         hits = knowledge_index.search(
-            " ".join(filter(None, [issue.issue_key, issue.summary, issue.description or "", " ".join(issue.labels), " ".join(issue.components)])),
+            _build_issue_query(issue),
             top_k=3,
         )
         analysis = _fallback_issue_analysis(report.report_date, issue, hits)
@@ -162,6 +163,8 @@ def _fallback_issue_analysis(report_date: str, issue: IssueRecord, hits: list[Se
     action_needed = []
     if "block" in issue.status.lower():
         action_needed.append("Stabilize the blocker path first and isolate the exact failing state transition.")
+    if issue.severity and issue.severity.lower() in {"major", "high", "highest"} and not issue.root_cause:
+        action_needed.append("Document the root cause explicitly because the issue is currently high severity.")
     if "timeout" in issue.summary.lower() or "timeout" in (issue.description or "").lower():
         action_needed.append("Collect timeout logs and validate queue head/tail synchronization around reset recovery.")
     if "power" in issue.summary.lower() or "recovery" in " ".join(issue.components).lower():
@@ -178,3 +181,38 @@ def _fallback_issue_analysis(report_date: str, issue: IssueRecord, hits: list[Se
         confidence="medium" if hits else "low",
         raw_response="offline-fallback",
     )
+
+
+def _build_issue_query(issue: IssueRecord) -> str:
+    values = [
+        issue.issue_key,
+        issue.summary,
+        issue.description or "",
+        issue.issue_type or "",
+        issue.severity or "",
+        issue.root_cause or "",
+        " ".join(issue.labels),
+        " ".join(issue.components),
+        issue.description_fields.get("Platform Name", ""),
+        issue.description_fields.get("Script Name", ""),
+        issue.description_fields.get("Expect Result", ""),
+        issue.description_fields.get("Actual Result", ""),
+        " ".join(issue.blocks_links),
+    ]
+    return " ".join(item for item in values if item)
+
+
+def _issue_fact_sheet(issue: IssueRecord) -> dict[str, Any]:
+    return {
+        "type": issue.issue_type,
+        "severity": issue.severity,
+        "root_cause": issue.root_cause,
+        "component": issue.components,
+        "platform": issue.description_fields.get("Platform Name"),
+        "script_name": issue.description_fields.get("Script Name"),
+        "expect_result": issue.description_fields.get("Expect Result"),
+        "actual_result": issue.description_fields.get("Actual Result"),
+        "blocks_links": issue.blocks_links,
+        "fix_versions": issue.fix_versions,
+        "affects_versions": issue.affects_versions,
+    }

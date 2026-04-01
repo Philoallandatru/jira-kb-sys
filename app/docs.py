@@ -37,11 +37,17 @@ class DocumentConverter:
         for path in self._iter_source_docs():
             markdown = self._convert_to_markdown(path)
             document = self._persist_markdown(path, markdown)
+            documents.append(document)
+        chunks = self.build_chunks_from_documents(documents)
+        return documents, chunks
+
+    def build_chunks_from_documents(self, documents: list[MarkdownDocument]) -> list[DocChunk]:
+        chunks: list[DocChunk] = []
+        for document in documents:
             current_chunks = list(chunk_markdown(document, self.config.max_chunk_chars, self.config.overlap_chars))
             self._persist_chunks(document, current_chunks)
-            documents.append(document)
             chunks.extend(current_chunks)
-        return documents, chunks
+        return chunks
 
     def _iter_source_docs(self) -> Iterable[Path]:
         exts = set(self.config.supported_extensions)
@@ -109,7 +115,7 @@ class DocumentConverter:
         return MarkdownDocument(
             document_id=_slugify(relative.as_posix()),
             source_path=str(source_path.resolve()),
-            source_type=source_path.suffix.lower().lstrip("."),
+            source_type=_normalize_source_type(source_path.suffix.lower()),
             title=source_path.stem,
             markdown_path=str(markdown_path.resolve()),
             content=markdown,
@@ -220,6 +226,11 @@ class BM25Index:
 
 def _slugify(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", text.strip()).strip("-").lower() or "document"
+
+
+def _normalize_source_type(suffix: str) -> str:
+    clean = suffix.lower().lstrip(".")
+    return f"local_{clean}" if clean else "local_document"
 
 
 def tokenize(text: str) -> list[str]:

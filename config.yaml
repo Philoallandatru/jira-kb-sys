@@ -7,6 +7,34 @@ jira:
   jql: ""
   max_results: 200
   timeout_seconds: 45
+  field_mapping:
+    issue_type: ""
+    severity: ""
+    report_department: ""
+    root_cause: ""
+    frequency: ""
+    fail_runtime: ""
+    firmware_version: ""
+    density: ""
+    form_factor: ""
+    platform_name: ""
+    script_name: ""
+    test_step: ""
+    expect_result: ""
+    actual_result: ""
+    activity_comment: ""
+    activity_all: ""
+
+confluence:
+  base_url: ""
+  username: ""
+  access_token: ""
+  crawl_mode: "space"
+  space_keys: []
+  root_page_urls: []
+  page_limit: 500
+  page_size: 50
+  timeout_seconds: 45
 
 docs:
   raw_dir: "./data/raw_docs"
