@@ -1,79 +1,135 @@
-# Jira KB 系统
+# Jira Summary 系统
 
-面向 SSD/NVMe 场景的 Jira 汇总、知识库检索与本地 AI 分析系统。
+一个面向 Jira 日报、管理摘要、知识检索和本地 AI 分析的中文系统。
 
-当前仓库已经具备这些能力：
+当前仓库已经具备这些主能力：
 
-- 通过 `base_url + access_token` 访问 Jira
-- 保存 Jira 每日快照，并补充真实 changelog 事件存储
-- 将本地 `PDF / PPTX / XLSX / DOCX` 转成 Markdown 并建立知识库
-- 生成日报、管理层摘要、文档问答、Jira + 文档联合问答
-- 提供单 Jira 深度分析
-- 提供 Streamlit 运维台
-- 提供 FastAPI 后端
-- 提供独立前端 `frontend/`，采用复古现代风格
+- 从 Jira 拉取快照并保存到 SQLite
+- 持久化 Jira changelog 事件与派生 delta
+- 将本地 `PDF / PPTX / XLSX / DOCX / Markdown` 转成统一知识 chunks
+- 将 Jira 快照、单 Jira AI 分析、日报 AI 分析一并写入统一知识库
+- 生成日报、管理层摘要、单 Jira 深度分析
+- 提供 Docs QA 与 Jira + Docs 联合问答
+- 提供 FastAPI 后端、Next.js 前端和 CLI
+- 提供持久化任务队列和应用内 worker
 
-## 当前产品能力
+## 当前功能
 
-### 1. Jira 数据
+### Jira 数据链路
 
-- 保存每日快照到 SQLite
-- 保存快照差分事件 `issue_events_derived`
-- 保存 Jira changelog 事件 `issue_change_events`
-- 支持根据 issue key 前缀推断团队：
-  - `[SV]` -> `SV`
-  - `[DV]` -> `DV`
+- 每日快照保存到 `issues_daily_snapshot`
+- 当前最新状态保存到 `issues_current`
+- 派生 delta 保存到 `issue_events_derived`
+- 原始 changelog 事件保存到 `issue_change_events`
+- 支持基于 changelog 的日期区间 full-sync / backfill
 
-### 2. AI 分析
+### AI 与知识库
 
-- 日报 AI 分析
-- 管理层摘要 `management_summary`
-- 单 Jira 深度分析
-- 文档问答
-- Jira + 文档联合问答
+- 产品文档 chunks 写入 `doc_chunks`
+- Jira knowledge chunks 也写入 `doc_chunks`
+- Docs QA 只检索产品文档 chunks
+- Jira + Docs QA 混合检索产品文档 chunks 与 Jira knowledge chunks
 
-### 3. 独立前端
+Jira knowledge 的 source type：
 
-已接通页面：
+- `jira_issue`
+- `jira_issue_analysis`
+- `jira_daily_analysis`
+
+### 任务系统
+
+所有 API 任务都先入库，再由应用内 worker 拉取执行。
+
+已持久化的任务字段包括：
+
+- `payload_json`
+- `attempt_count`
+- `last_error`
+- `started_at`
+- `finished_at`
+
+当前行为：
+
+- 新任务先进入 `queued`
+- worker 按顺序 claim 任务并执行
+- 进程异常中断后，启动时会把残留的 `running` 任务回收到 `queued`
+- 运行失败会自动重试，默认最多 3 次
+
+这让任务不再依赖触发它的那次 HTTP 请求存活。
+
+## 前端页面
+
+当前已接入：
 
 - `/`
 - `/dashboard`
 - `/reports`
 - `/management-summary`
 - `/issues`
+- `/docs-qa`
+- `/jira-docs-qa`
+- `/tasks`
 - `/settings`
 
-### 4. Prompt 与输出配置
+## 常用命令
 
-支持：
+```powershell
+$env:PYTHONPATH='.'
+python -m app.cli incremental-sync
+python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
+python -m app.cli build-docs
+python -m app.cli analyze --date 2026-03-31
+python -m app.cli report --date 2026-03-31
+python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
+python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
+uvicorn app.api:app --reload
+streamlit run app/ui.py
+```
 
-- 默认输出语言 `zh-CN`
-- 全局 `max_output_tokens`
-- 场景级 `scenario_max_output_tokens`
-- 场景级 `custom_prompts`
+前端开发：
 
-相关场景：
+```powershell
+cd frontend
+npm install
+npm run dev
+```
 
-- `daily_report`
-- `issue_deep_analysis`
-- `docs_qa`
-- `jira_docs_qa`
-- `management_summary`
+如需指定后端地址：
 
-## 主要目录
+```powershell
+$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
+npm run dev
+```
 
-- [app](/E:/Code/AI/codex/pr-agent/jira-summary/app)
-  Python 后端、CLI、服务层、Streamlit UI
-- [frontend](/E:/Code/AI/codex/pr-agent/jira-summary/frontend)
-  Next.js 独立前端
-- [docs](/E:/Code/AI/codex/pr-agent/jira-summary/docs)
-  中文架构、运行与差距说明
-- [tests](/E:/Code/AI/codex/pr-agent/jira-summary/tests)
-  回归测试
+## FastAPI 接口
+
+核心接口包括：
+
+- `GET /health`
+- `GET /dashboard/overview`
+- `GET /reports/daily`
+- `GET /reports/daily/{report_date}`
+- `POST /tasks/reports/management-summary`
+- `POST /tasks/sync/incremental`
+- `POST /tasks/sync/full`
+- `POST /tasks/crawl`
+- `POST /tasks/build-docs`
+- `POST /tasks/analyze`
+- `POST /tasks/report`
+- `GET /tasks`
+- `GET /tasks/{run_id}`
+- `GET /reports/management-summary/{run_id}`
+- `GET /issues`
+- `GET /issues/{issue_key}`
+- `GET /issues/{issue_key}/deep-analysis`
+- `POST /qa/docs`
+- `POST /qa/jira-docs`
+- `GET /settings/prompts`
+- `PUT /settings/prompts`
 
 ## 配置示例
 
-`config.yaml`：
+`config.yaml`
 
 ```yaml
 jira:
@@ -99,61 +155,22 @@ llm:
     management_summary: 6144
 ```
 
-## 常用命令
+## 主要目录
 
-```powershell
-$env:PYTHONPATH='.'
-python -m app.cli crawl
-python -m app.cli build-docs
-python -m app.cli analyze --date 2026-03-31
-python -m app.cli report --date 2026-03-31
-python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
-python -m app.cli ask "What does section 5.2 say about the Create I/O Completion Queue command in NVMe over PCIe?"
-uvicorn app.api:app --reload
-streamlit run app/ui.py
-```
+- [app](/E:/Code/AI/codex/pr-agent/jira-summary/app)
+  Python 后端、CLI、任务执行、AI 分析
+- [frontend](/E:/Code/AI/codex/pr-agent/jira-summary/frontend)
+  Next.js 独立前端
+- [docs](/E:/Code/AI/codex/pr-agent/jira-summary/docs)
+  架构、运行和差距说明
+- [tests](/E:/Code/AI/codex/pr-agent/jira-summary/tests)
+  回归测试
 
-独立前端：
+## 仍然存在的边界
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+当前剩余的主要边界只有两类：
 
-如需指定后端地址：
+1. full-sync 仍然是基于“当前 issue + changelog”的历史近似回放，不是 Jira 官方历史快照源。
+2. 任务系统已经是持久化队列，但仍是单进程应用内 worker，不是独立的分布式 worker / queue。
 
-```powershell
-$env:NEXT_PUBLIC_API_BASE_URL="http://127.0.0.1:8000"
-npm run dev
-```
-
-## FastAPI 接口
-
-当前已提供：
-
-- `GET /health`
-- `GET /dashboard/overview`
-- `GET /reports/daily`
-- `GET /reports/daily/{report_date}`
-- `POST /tasks/reports/management-summary`
-- `GET /reports/management-summary/{run_id}`
-- `GET /issues`
-- `GET /issues/{issue_key}`
-- `GET /issues/{issue_key}/deep-analysis`
-- `POST /qa/docs`
-- `POST /qa/jira-docs`
-- `GET /settings/prompts`
-- `PUT /settings/prompts`
-
-## 已知边界
-
-当前仍未完全完成的项见：
-
-- [docs/GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md)
-
-其中最大的剩余项是：
-
-- Jira 全量/增量同步命令与 Web 任务中心还不完整
-- Docs QA 与 Jira + Docs QA 还没有独立前端页面
-- 前端还没有通用异步任务中心
+更细的差距见 [docs/GAP_ANALYSIS.md](/E:/Code/AI/codex/pr-agent/jira-summary/docs/GAP_ANALYSIS.md)。

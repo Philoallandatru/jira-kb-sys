@@ -22,6 +22,8 @@ export type TaskRun = {
   status: string;
   details: string | null;
   details_json: unknown;
+  attempt_count: number;
+  last_error?: string | null;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;

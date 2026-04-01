@@ -1,8 +1,9 @@
 # 差距分析
 
-## 已完成
+## 已完成范围
 
-### 第一阶段范围
+### 第一阶段
+
 - 中文界面
 - 默认中文 Prompt
 - 管理层摘要 CLI / API / 前端页面
@@ -12,56 +13,81 @@
 - Jira 列表、详情与单 Jira 深度分析页面
 - Prompt Settings 页面
 
-### 第二阶段范围
+### 第二阶段
+
 - `management_summary` 独立场景
 - 单 Jira 深度分析独立链路
 - Prompt 场景配置与场景级输出长度
 - Jira changelog 事件持久化
-- 独立前端正式接入多页，而不是只保留占位页
-- `docs-qa` 与 `jira-docs-qa` 独立前端页面
+- Docs QA 与 Jira Docs QA 独立前端页面
 - 通用任务中心第一版
 - 增量同步 / 全量同步任务入口
 - Jira 快照与 AI 分析进入统一知识切块链路
+- Jira + Docs 联合检索
+- 持久化任务队列与应用内 worker
 
-## 当前状态
+## 当前已补齐的能力
 
-### 已经补齐的能力
-- `POST /tasks/sync/incremental` 与 `POST /tasks/sync/full`
-- CLI 命令 `incremental-sync` 与 `full-sync`
-- Task Center 前端可直接启动同步、构建知识库、分析和报表任务
-- `build-docs` 会同时写入产品文档 chunks 与 Jira knowledge chunks
-- Docs QA 已改为只检索产品文档 chunks，避免 Jira 内容污染纯文档问答
-- Issue deep analysis 也改为只使用产品文档 chunks 做 spec / policy 对照
+### 同步与回补
 
-### Jira 知识入库策略
-- `jira_issue`：Jira 快照本体
-- `jira_issue_analysis`：单 Jira AI 分析
-- `jira_daily_analysis`：日报级 AI 分析
-- 统一写入 `doc_chunks`
-- 通过 `jira_` 前缀与普通文档 chunks 隔离
+- `POST /tasks/sync/incremental`
+- `POST /tasks/sync/full`
+- CLI `incremental-sync`
+- CLI `full-sync --date-from --date-to`
+- full-sync 支持按日期区间回补
+- full-sync 使用 changelog 对当前 issue 做历史近似重建
 
-## 剩余差距
+### 知识库与问答
 
-### 1. 任务编排仍是轻量级后台任务
-- 当前仍基于 FastAPI `BackgroundTasks`
-- 还不是独立 worker / queue / scheduler
-- 长任务失败重试、并发控制、可观测性仍偏弱
+- `build-docs` 同时构建产品文档 chunks 与 Jira knowledge chunks
+- Docs QA 只检索产品文档 chunks
+- Jira Docs QA 混合检索产品文档 chunks 与 Jira knowledge chunks
+- 单 Jira 深度分析只使用产品文档 chunks 做 spec / policy 对照
 
-### 2. Jira + Docs QA 还没有直接检索 Jira chunks
-- 当前联合问答仍然是：
-  - Jira 上下文来自快照和 AI 分析表
-  - 文档证据来自产品文档 chunks
-- 这保证了 docs-only 检索干净，但没有让 QA 直接引用已 chunk 化的 Jira knowledge
+### 任务执行
 
-### 3. 管理层摘要结果页仍可继续增强
-- 已有独立页面与任务链路
-- 但尚未做：
-  - 历史摘要对比
-  - 摘要版本回溯
-  - 多次生成结果 diff
+- API 任务先入库再执行
+- `runs` 持久化保存 payload、开始/结束时间、尝试次数、最后错误
+- 应用启动时会回收中断的 `running` 任务
+- worker 会自动重试失败任务，默认最多 3 次
+- 前端任务中心可查看创建时间、开始时间、结束时间、尝试次数和最后错误
 
-## 建议的后续顺序
+## 仍然存在的边界
 
-1. 把后台任务从 `BackgroundTasks` 升级到独立 worker / queue。
-2. 为联合问答增加可控的 Jira chunk 检索层，而不是只用结构化快照上下文。
-3. 给 management summary 增加历史版本与差异对比。
+### 1. full-sync 不是 Jira 官方历史快照
+
+当前 full-sync 的语义已经从“伪全量”提升成“可回补日期区间”，但它仍然不是 Jira 官方快照源。
+
+限制包括：
+
+- 历史状态依赖当前 issue 数据和 changelog 回放
+- 如果 JQL 本身排除了某些老单，这些数据依然回补不回来
+- 无法保证对非常早期字段状态做到完全精确复原
+
+### 2. 任务系统仍是单进程 worker
+
+当前已经不是请求绑定的 `BackgroundTasks`，但还不是完整的独立任务系统。
+
+还没做的能力：
+
+- 多 worker 并发调度
+- 分布式队列
+- 死信队列
+- 任务取消
+- 任务优先级
+- 指数退避或可配置重试策略
+- 真正的跨进程执行隔离
+
+### 3. 管理层摘要历史能力仍可增强
+
+当前已经有生成、落库和页面展示，但还没有：
+
+- 历史版本对比
+- 多次生成结果 diff
+- 摘要版本回溯
+
+## 建议后续顺序
+
+1. 如果要继续补可靠性，优先把任务执行迁移到独立 worker / queue。
+2. 如果要继续补数据准确性，优先评估是否能拿到 Jira 官方历史快照来源。
+3. 如果要继续补产品能力，优先做 management summary 历史版本对比。

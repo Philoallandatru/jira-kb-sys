@@ -46,6 +46,8 @@ class Repository:
                     status TEXT NOT NULL,
                     details TEXT,
                     payload_json TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
                     started_at TEXT,
                     finished_at TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -105,6 +107,8 @@ class Repository:
                 """
             )
             self._ensure_column(conn, "runs", "payload_json", "TEXT")
+            self._ensure_column(conn, "runs", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "runs", "last_error", "TEXT")
             self._ensure_column(conn, "runs", "started_at", "TEXT")
             self._ensure_column(conn, "runs", "finished_at", "TEXT")
             conn.commit()
@@ -123,10 +127,28 @@ class Repository:
         details: str = "",
         payload: dict | None = None,
     ) -> int:
+        started_at = datetime.utcnow().replace(microsecond=0).isoformat() if status == "running" else None
+        finished_at = datetime.utcnow().replace(microsecond=0).isoformat() if status in {"success", "failed", "cancelled"} else None
+        attempt_count = 1 if status == "running" else 0
+        last_error = details if status == "failed" and details else None
         with self.connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO runs (run_type, run_date, status, details, payload_json) VALUES (?, ?, ?, ?, ?)",
-                (run_type, run_date, status, details, json.dumps(payload, ensure_ascii=False) if payload is not None else None),
+                """
+                INSERT INTO runs (
+                    run_type, run_date, status, details, payload_json, attempt_count, last_error, started_at, finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_type,
+                    run_date,
+                    status,
+                    details,
+                    json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+                    attempt_count,
+                    last_error,
+                    started_at,
+                    finished_at,
+                ),
             )
             conn.commit()
             return int(cursor.lastrowid)
@@ -137,26 +159,86 @@ class Repository:
                 conn.execute(
                     """
                     UPDATE runs
-                    SET status = ?, details = ?, started_at = COALESCE(started_at, CURRENT_TIMESTAMP), finished_at = NULL
+                    SET status = ?,
+                        details = ?,
+                        started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                        finished_at = NULL,
+                        attempt_count = CASE WHEN attempt_count <= 0 THEN 1 ELSE attempt_count END
                     WHERE id = ?
                     """,
                     (status, details, run_id),
                 )
             elif status in {"success", "failed", "cancelled"}:
                 conn.execute(
-                    "UPDATE runs SET status = ?, details = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (status, details, run_id),
+                    """
+                    UPDATE runs
+                    SET status = ?,
+                        details = ?,
+                        finished_at = CURRENT_TIMESTAMP,
+                        last_error = CASE WHEN ? = 'failed' THEN ? ELSE last_error END
+                    WHERE id = ?
+                    """,
+                    (status, details, status, details, run_id),
                 )
             else:
                 conn.execute("UPDATE runs SET status = ?, details = ? WHERE id = ?", (status, details, run_id))
             conn.commit()
+
+    def requeue_running_runs(self, reason: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = 'queued',
+                    details = ?,
+                    finished_at = NULL
+                WHERE status = 'running'
+                """,
+                (reason,),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def schedule_retry(self, run_id: int, error: str, max_attempts: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute("SELECT attempt_count FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if not row:
+                return False
+            attempt_count = int(row["attempt_count"] or 0)
+            if attempt_count >= max_attempts:
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'failed',
+                        details = ?,
+                        last_error = ?,
+                        finished_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (error, error, run_id),
+                )
+                conn.commit()
+                return False
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = 'queued',
+                    details = ?,
+                    last_error = ?,
+                    finished_at = NULL
+                WHERE id = ?
+                """,
+                (f"Retry scheduled after attempt {attempt_count}/{max_attempts}: {error}", error, run_id),
+                )
+            conn.commit()
+            return True
 
     def claim_next_queued_run(self) -> dict[str, str | int | None] | None:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
+                SELECT id, run_type, run_date, status, details, payload_json, attempt_count, last_error, created_at, started_at, finished_at
                 FROM runs
                 WHERE status = 'queued'
                 ORDER BY id ASC
@@ -169,7 +251,10 @@ class Repository:
             conn.execute(
                 """
                 UPDATE runs
-                SET status = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP), finished_at = NULL
+                SET status = 'running',
+                    started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                    finished_at = NULL,
+                    attempt_count = attempt_count + 1
                 WHERE id = ? AND status = 'queued'
                 """,
                 (row["id"],),
@@ -177,6 +262,7 @@ class Repository:
             conn.commit()
         claimed = dict(row)
         claimed["status"] = "running"
+        claimed["attempt_count"] = int(claimed.get("attempt_count") or 0) + 1
         if claimed.get("started_at") is None:
             claimed["started_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
         return claimed
@@ -185,7 +271,7 @@ class Repository:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
+                SELECT id, run_type, run_date, status, details, payload_json, attempt_count, last_error, created_at, started_at, finished_at
                 FROM runs
                 ORDER BY id DESC
                 LIMIT ?
@@ -198,7 +284,7 @@ class Repository:
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, run_type, run_date, status, details, payload_json, created_at, started_at, finished_at
+                SELECT id, run_type, run_date, status, details, payload_json, attempt_count, last_error, created_at, started_at, finished_at
                 FROM runs
                 WHERE id = ?
                 """,

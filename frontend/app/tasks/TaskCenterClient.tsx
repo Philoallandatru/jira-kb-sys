@@ -298,9 +298,11 @@ export function TaskCenterClient() {
                   <div className="summary-section">
                     <h3>Meta</h3>
                     <p>Run Date: {selectedRun.run_date}</p>
+                    <p>Attempts: {selectedRun.attempt_count}</p>
                     <p>Created At: {selectedRun.created_at}</p>
                     <p>Started At: {selectedRun.started_at || "-"}</p>
                     <p>Finished At: {selectedRun.finished_at || "-"}</p>
+                    <p>Last Error: {selectedRun.last_error || "-"}</p>
                   </div>
                   <div className="summary-section">
                     <h3>Details</h3>
