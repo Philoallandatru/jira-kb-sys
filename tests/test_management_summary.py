@@ -1,5 +1,5 @@
-from app.management import _build_metrics
-from app.models import IssueDelta, IssueRecord
+from app.management import _build_metrics, _fallback_management_summary, render_management_markdown
+from app.models import IssueDelta, IssueRecord, ManagementSummaryRequest
 
 
 def test_build_management_metrics_counts_core_signals():
@@ -22,3 +22,24 @@ def test_build_management_metrics_counts_core_signals():
     assert metrics.blocked_count == 1
     assert metrics.high_priority_open_count == 1
     assert metrics.issues_without_owner == 1
+
+
+def test_render_management_markdown_uses_readable_labels():
+    issues = [IssueRecord(issue_key="[SV]SSD-1", summary="Timeout", status="Blocked", team="SV", priority="High", assignee="Alice")]
+    deltas = [IssueDelta(issue_key="[SV]SSD-1", change_type="status_changed", details="Status changed from Open to Blocked")]
+    metrics = _build_metrics(issues, deltas)
+    result = _fallback_management_summary(
+        run_id=1,
+        request=ManagementSummaryRequest(date_from="2026-04-01", date_to="2026-04-02"),
+        metrics=metrics,
+        issues=issues,
+        deltas=deltas,
+        issue_analyses={},
+    )
+
+    markdown = render_management_markdown(result)
+
+    assert "# Jira 管理层摘要" in markdown
+    assert "## 核心指标" in markdown
+    assert "## 当前风险与阻塞" in markdown
+    assert "## 数据不足" in markdown
