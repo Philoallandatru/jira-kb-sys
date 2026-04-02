@@ -64,6 +64,39 @@ class DocsConfig(BaseModel):
     supported_extensions: list[str] = Field(default_factory=list)
 
 
+class RetrievalConfig(BaseModel):
+    backend: str = "tantivy"
+    index_dir: str = "./data/retrieval"
+    bm25_top_k: int = 50
+    dense_top_k: int = 50
+    fused_top_k: int = 60
+    rerank_top_k: int = 10
+    enable_recency_bias: bool = True
+    recency_half_life_days: int = 30
+    source_type_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "jira_issue": 1.35,
+            "jira_issue_analysis": 0.95,
+            "jira_daily_analysis": 0.8,
+            "confluence_page": 1.2,
+            "local_spec": 1.25,
+            "local_md": 1.0,
+        }
+    )
+
+
+class EmbeddingConfig(BaseModel):
+    model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    batch_size: int = 16
+    device: str | None = None
+
+
+class RerankerConfig(BaseModel):
+    model_name: str = "BAAI/bge-reranker-base"
+    max_length: int = 512
+    device: str | None = None
+
+
 class StorageConfig(BaseModel):
     database_path: str
     output_dir: str
@@ -88,6 +121,8 @@ class ReportingConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8000
     cors_allow_origins: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
@@ -101,6 +136,9 @@ class AppConfig(BaseModel):
     jira: JiraConfig
     confluence: ConfluenceConfig = Field(default_factory=ConfluenceConfig)
     docs: DocsConfig
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     storage: StorageConfig
     llm: LLMConfig
     reporting: ReportingConfig
@@ -113,6 +151,9 @@ class EnvSettings(BaseSettings):
     jira: dict[str, Any] = Field(default_factory=dict)
     confluence: dict[str, Any] = Field(default_factory=dict)
     docs: dict[str, Any] = Field(default_factory=dict)
+    retrieval: dict[str, Any] = Field(default_factory=dict)
+    embedding: dict[str, Any] = Field(default_factory=dict)
+    reranker: dict[str, Any] = Field(default_factory=dict)
     storage: dict[str, Any] = Field(default_factory=dict)
     llm: dict[str, Any] = Field(default_factory=dict)
     reporting: dict[str, Any] = Field(default_factory=dict)
@@ -139,6 +180,9 @@ def load_config(config_path: str | None = None) -> AppConfig:
             "jira": env.jira,
             "confluence": env.confluence,
             "docs": env.docs,
+            "retrieval": env.retrieval,
+            "embedding": env.embedding,
+            "reranker": env.reranker,
             "storage": env.storage,
             "llm": env.llm,
             "reporting": env.reporting,
@@ -150,6 +194,7 @@ def load_config(config_path: str | None = None) -> AppConfig:
         config.docs.raw_dir,
         config.docs.markdown_dir,
         config.docs.chunks_dir,
+        config.retrieval.index_dir,
         config.storage.output_dir,
         Path(config.storage.database_path).parent,
     ]:

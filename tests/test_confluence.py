@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.config import ConfluenceConfig, DocsConfig
-from app.confluence import ConfluenceCrawler, ConfluenceError
+from app.confluence import ConfluenceCrawler, ConfluenceError, storage_to_markdownish
 
 
 def test_confluence_crawler_builds_markdown_documents_from_space_pages(tmp_path, monkeypatch):
@@ -120,3 +120,26 @@ def test_confluence_crawler_rejects_root_urls_without_page_id(tmp_path, monkeypa
         assert False, "Expected ConfluenceError for root URL without pageId"
     except ConfluenceError as exc:
         assert "pageId" in str(exc)
+
+
+def test_storage_to_markdownish_preserves_structure_and_filters_noise():
+    storage_html = """
+    <ac:structured-macro ac:name="toc"></ac:structured-macro>
+    <h1>Known Regressions</h1>
+    <p>FW 1.0.7 regressed reset ordering validation.</p>
+    <ac:structured-macro ac:name="warning"><ac:rich-text-body><p>Do not skip recovery validation.</p></ac:rich-text-body></ac:structured-macro>
+    <table>
+      <tr><th>Field</th><th>Value</th></tr>
+      <tr><td>Error Code</td><td>0xDEAD</td></tr>
+    </table>
+    <pre>timeout waiting for admin queue</pre>
+    """
+
+    markdown = storage_to_markdownish(storage_html)
+
+    assert "Known Regressions" in markdown
+    assert "FW 1.0.7 regressed reset ordering validation." in markdown
+    assert "[WARNING]" in markdown
+    assert "Field | Value" in markdown
+    assert "timeout waiting for admin queue" in markdown
+    assert "toc" not in markdown.lower()

@@ -8,6 +8,7 @@ from app.config import DocsConfig
 from app.docs import chunk_markdown
 from app.models import DailyAIAnalysis, DocChunk, IssueAIAnalysis, IssueRecord, MarkdownDocument, utc_now_iso
 from app.repository import Repository
+from app.retrieval.preprocess import extract_exact_terms
 
 JIRA_SOURCE_PREFIX = "jira_"
 
@@ -60,6 +61,7 @@ def _build_issue_chunks(
             markdown_path=f"jira://markdown/{snapshot_date}/{issue.issue_key}",
             content=_render_issue_markdown(issue, snapshot_date),
             updated_at=utc_now_iso(),
+            metadata=_issue_document_metadata(issue, snapshot_date),
         )
     ]
     if issue_analysis:
@@ -72,6 +74,10 @@ def _build_issue_chunks(
                 markdown_path=f"jira://markdown-analysis/{snapshot_date}/{issue.issue_key}",
                 content=_render_issue_analysis_markdown(issue_analysis),
                 updated_at=utc_now_iso(),
+                metadata={
+                    **_issue_document_metadata(issue, snapshot_date),
+                    "source_id": f"jira-analysis:{issue.issue_key}:{snapshot_date}",
+                },
             )
         )
 
@@ -95,6 +101,14 @@ def _build_daily_analysis_chunks(
         markdown_path=f"jira://markdown-daily-analysis/{snapshot_date}",
         content=_render_daily_analysis_markdown(daily_analysis),
         updated_at=utc_now_iso(),
+        metadata={
+            "source_id": f"jira-daily:{snapshot_date}",
+            "page_title": f"Daily analysis {snapshot_date}",
+            "labels": ["jira", "daily-analysis"],
+            "ancestor_titles": ["Jira Daily Analyses"],
+            "authors": [],
+            "comment_snippets": [],
+        },
     )
     return _retag_source_type(
         list(chunk_markdown(document, docs_config.max_chunk_chars, docs_config.overlap_chars)),
@@ -107,7 +121,12 @@ def _retag_source_type(chunks: list[DocChunk], source_type: str, issue: IssueRec
     normalized = source_type if source_type.startswith(JIRA_SOURCE_PREFIX) else f"{JIRA_SOURCE_PREFIX}{source_type}"
     extra_tags = _issue_search_tags(issue) if issue else []
     return [
-        replace(chunk, source_type=normalized, tags=list(dict.fromkeys([*chunk.tags, *extra_tags])))
+        replace(
+            chunk,
+            source_type=normalized,
+            exact_terms=list(dict.fromkeys([*chunk.exact_terms, *extra_tags])),
+            tags=list(dict.fromkeys([*chunk.tags, *extra_tags])),
+        )
         for chunk in chunks
     ]
 
@@ -248,7 +267,29 @@ def _issue_search_tags(issue: IssueRecord | None) -> list[str]:
     for key in ["Platform Name", "Script Name", "Firmware Version", "Density", "Form Factor"]:
         if issue.description_fields.get(key):
             values.extend(_tokenize_tag(issue.description_fields[key]))
+    values.extend(extract_exact_terms(issue.summary))
+    values.extend(extract_exact_terms(issue.description or ""))
     return list(dict.fromkeys(values))
+
+
+def _issue_document_metadata(issue: IssueRecord, snapshot_date: str) -> dict[str, object]:
+    return {
+        "source_id": f"jira:{issue.issue_key}:{snapshot_date}",
+        "page_title": f"{issue.issue_key} snapshot",
+        "ancestor_titles": ["Jira", snapshot_date],
+        "labels": [*issue.labels, *(issue.components or []), issue.status, issue.severity or "", issue.root_cause or ""],
+        "authors": [issue.assignee] if issue.assignee else [],
+        "comment_snippets": list(issue.comments[:3]),
+        "issue_key": issue.issue_key,
+        "team": issue.team,
+        "severity": issue.severity,
+        "root_cause": issue.root_cause,
+        "fix_versions": issue.fix_versions,
+        "affects_versions": issue.affects_versions,
+        "platform_name": issue.description_fields.get("Platform Name"),
+        "script_name": issue.description_fields.get("Script Name"),
+        "firmware_version": issue.description_fields.get("Firmware Version"),
+    }
 
 
 def _tokenize_tag(text: str) -> Iterable[str]:

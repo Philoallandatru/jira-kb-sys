@@ -7,10 +7,11 @@ from requests import RequestException
 
 from app.analysis import LLMClient
 from app.config import AppConfig
-from app.docs import BM25Index, SearchHit
+from app.docs import SearchHit
 from app.jira_knowledge import filter_product_doc_chunks
 from app.models import DeepAnalysisCitation, IssueAIAnalysis, IssueDeepAnalysisResult, IssueRecord, utc_now_iso
 from app.repository import Repository
+from app.retrieval import build_retriever
 
 
 def build_issue_deep_analysis(
@@ -27,11 +28,12 @@ def build_issue_deep_analysis(
         raise RuntimeError(f"Issue `{issue_key}` not found in snapshot {resolved_snapshot}")
 
     chunks = filter_product_doc_chunks(repo.load_doc_chunks())
-    index = BM25Index(chunks)
+    index = build_retriever(config, chunks)
     issue_fact_sheet = _build_issue_fact_sheet(issue)
-    related_hits = index.search(_build_issue_query(issue), top_k=8)
+    related_hits = index.retrieve(_build_issue_query(issue), top_k=8).top_hits
     issue_analyses = {item.issue_key: item for item in repo.load_issue_analyses(resolved_snapshot)}
     related_issues = _related_issues(issue, repo.load_snapshot(resolved_snapshot), issue_analyses)
+
     try:
         client = LLMClient(config)
         payload = client.chat_json(
@@ -51,7 +53,9 @@ def build_issue_deep_analysis(
             ),
             schema_hint=(
                 '{"issue_summary":"string","spec_relations":["string"],"policy_relations":["string"],'
-                '"related_jira_designs":["string"],"suspected_problems":["string"],"next_actions":["string"],'
+                '"related_jira_designs":["string"],"comment_summary":"string","comment_key_points":["string"],'
+                '"comment_risks_blockers":["string"],"comment_actions_decisions":["string"],'
+                '"suspected_problems":["string"],"next_actions":["string"],'
                 '"open_questions":["string"],"confidence":"low|medium|high",'
                 '"citations":[{"source_type":"string","source_path":"string","section_path":["string"],"summary":"string"}]}'
             ),
@@ -64,6 +68,10 @@ def build_issue_deep_analysis(
             spec_relations=_ensure_list(payload.get("spec_relations")),
             policy_relations=_ensure_list(payload.get("policy_relations")),
             related_jira_designs=_ensure_list(payload.get("related_jira_designs")),
+            comment_summary=str(payload.get("comment_summary", "")),
+            comment_key_points=_ensure_list(payload.get("comment_key_points")),
+            comment_risks_blockers=_ensure_list(payload.get("comment_risks_blockers")),
+            comment_actions_decisions=_ensure_list(payload.get("comment_actions_decisions")),
             suspected_problems=_ensure_list(payload.get("suspected_problems")),
             next_actions=_ensure_list(payload.get("next_actions")),
             open_questions=_ensure_list(payload.get("open_questions")),
@@ -81,51 +89,54 @@ def _fallback_issue_deep_analysis(
     related_issues: list[dict[str, str | list[str]]],
     cached_analysis: IssueAIAnalysis | None,
 ) -> IssueDeepAnalysisResult:
-    spec_relations = []
-    policy_relations = []
-    citations = []
+    spec_relations: list[str] = []
+    policy_relations: list[str] = []
+    citations: list[DeepAnalysisCitation] = []
     fact_sheet = _build_issue_fact_sheet(issue)
+    comment_insights = _summarize_comments(issue.comments)
+
     for hit in hits:
         category = _categorize_hit(hit)
         summary = f"{hit.chunk.doc_title} / {' / '.join(hit.chunk.section_path)}"
-        citation = DeepAnalysisCitation(
-            source_type=category,
-            source_path=hit.chunk.source_path,
-            section_path=hit.chunk.section_path,
-            summary=summary,
+        citations.append(
+            DeepAnalysisCitation(
+                source_type=category,
+                source_path=hit.chunk.source_path,
+                section_path=hit.chunk.section_path,
+                summary=summary,
+            )
         )
-        citations.append(citation)
         note = f"{summary}: {' '.join(hit.chunk.content.split())[:180]}"
         if category == "policy":
             policy_relations.append(note)
         elif category == "spec":
             spec_relations.append(note)
 
-    suspected = []
+    suspected: list[str] = []
     if cached_analysis:
-        suspected.append(f"Existing issue analysis suggests root cause: {cached_analysis.suspected_root_cause}")
+        suspected.append(f"Existing issue analysis suggests the root cause may be: {cached_analysis.suspected_root_cause}")
     if "block" in issue.status.lower():
-        suspected.append("Current status still signals a blocker and should be cleared before broader rollout.")
+        suspected.append("The issue is still blocked, so the blocking dependency should be cleared before further execution.")
     if issue.severity and issue.severity.lower() in {"major", "highest", "high"} and not issue.root_cause:
-        suspected.append("Severity is elevated but root cause is still missing from the Jira record.")
+        suspected.append("The issue is high severity, but Jira still lacks a clearly documented root cause.")
     if not spec_relations:
-        spec_relations.append("No strong spec evidence was retrieved from the local knowledge base.")
+        spec_relations.append("No strongly relevant spec evidence was found in the local knowledge base.")
     if not policy_relations:
-        policy_relations.append("No strong policy or design guidance was retrieved from the local knowledge base.")
+        policy_relations.append("No strongly relevant policy or design-guidance evidence was found in the local knowledge base.")
 
     next_actions = list(cached_analysis.action_needed if cached_analysis else [])
     if issue.assignee is None:
-        next_actions.append("Assign a clear owner before driving further debugging or remediation work.")
+        next_actions.append("Assign a single owner before continuing the investigation or fix.")
     if not next_actions:
-        next_actions.append("Collect logs, reproduce the issue, and compare behavior against spec and policy evidence.")
+        next_actions.append("Collect logs, reproduce the issue, and validate actual behavior against the matched spec and policy evidence.")
 
-    open_questions = []
+    open_questions: list[str] = []
     if issue.priority and issue.priority.lower() in {"highest", "high", "critical", "p0", "p1"}:
-        open_questions.append("Are the release gate and regression criteria for this high-priority issue explicit?")
+        open_questions.append("Are the release gate and regression sign-off criteria already defined for this high-priority issue?")
     if not issue.description:
-        open_questions.append("Should Jira be updated with reproduction steps, impact, and expected behavior?")
+        open_questions.append("Should the Jira issue be updated with reproduction steps, impact scope, and expected behavior?")
     if not issue.fix_versions:
-        open_questions.append("Should a target fix version be assigned before this item remains in execution?")
+        open_questions.append("Should a target fix version be assigned before execution continues?")
     if fact_sheet["platform"] or fact_sheet["script_name"]:
         open_questions.append("Has the reported platform and script combination been reproduced independently?")
 
@@ -136,9 +147,13 @@ def _fallback_issue_deep_analysis(
         spec_relations=spec_relations,
         policy_relations=policy_relations,
         related_jira_designs=[item["issue_key"] + ": " + str(item["summary"]) for item in related_issues[:5]],
-        suspected_problems=suspected or ["Evidence is currently too weak to support a stable conclusion."],
+        comment_summary=comment_insights["summary"],
+        comment_key_points=comment_insights["key_points"],
+        comment_risks_blockers=comment_insights["risks_blockers"],
+        comment_actions_decisions=comment_insights["actions_decisions"],
+        suspected_problems=suspected or ["Current evidence is still insufficient to support a stable conclusion."],
         next_actions=next_actions,
-        open_questions=open_questions or ["Is there enough root-cause evidence to make a confident decision?"],
+        open_questions=open_questions or ["Do we now have enough root-cause evidence to support a concrete decision?"],
         confidence="medium" if hits else "low",
         citations=citations[:6],
         raw_response="offline-fallback",
@@ -200,9 +215,9 @@ def _serialize_hit(hit: SearchHit) -> dict[str, object]:
         "source_type": _categorize_hit(hit),
         "source_path": hit.chunk.source_path,
         "doc_title": hit.chunk.doc_title,
-        "section_path": hit.chunk.section_path,
+        "section_path": hit.chunk.heading_path,
         "score": hit.score,
-        "content": hit.chunk.content,
+        "content": hit.chunk.raw_text,
     }
 
 
@@ -242,7 +257,7 @@ def _ensure_citations(value: object, hits: list[SearchHit]) -> list[DeepAnalysis
     deduped = []
     seen = Counter()
     for hit in hits:
-        summary = f"{hit.chunk.doc_title} / {' / '.join(hit.chunk.section_path)}"
+        summary = f"{hit.chunk.page_title or hit.chunk.doc_title} / {' / '.join(hit.chunk.heading_path)}"
         key = (hit.chunk.source_path, tuple(hit.chunk.section_path))
         seen[key] += 1
         if seen[key] > 1:
@@ -251,7 +266,7 @@ def _ensure_citations(value: object, hits: list[SearchHit]) -> list[DeepAnalysis
             DeepAnalysisCitation(
                 source_type=_categorize_hit(hit),
                 source_path=hit.chunk.source_path,
-                section_path=hit.chunk.section_path,
+                section_path=hit.chunk.heading_path,
                 summary=summary,
             )
         )
@@ -285,6 +300,7 @@ def _build_issue_query(issue: IssueRecord) -> str:
 
 
 def _build_issue_fact_sheet(issue: IssueRecord) -> dict[str, object]:
+    comment_insights = _summarize_comments(issue.comments)
     return {
         "issue_key": issue.issue_key,
         "summary": issue.summary,
@@ -306,4 +322,53 @@ def _build_issue_fact_sheet(issue: IssueRecord) -> dict[str, object]:
         "blocks_links": issue.blocks_links,
         "mentioned_in_links": issue.mentioned_in_links,
         "issue_links": issue.issue_links,
+        "comments_count": len(issue.comments),
+        "comment_summary": comment_insights["summary"],
+        "comment_key_points": comment_insights["key_points"],
+        "comment_risks_blockers": comment_insights["risks_blockers"],
+        "comment_actions_decisions": comment_insights["actions_decisions"],
+        "comment_samples": comment_insights["samples"],
+    }
+
+
+def _summarize_comments(comments: list[str], max_comments: int = 8, max_chars_per_comment: int = 280) -> dict[str, object]:
+    trimmed = []
+    for comment in comments[:max_comments]:
+        normalized = " ".join(comment.split())
+        if not normalized:
+            continue
+        trimmed.append(normalized[:max_chars_per_comment])
+
+    if not trimmed:
+        return {
+            "summary": "No usable comment information is available.",
+            "key_points": [],
+            "risks_blockers": [],
+            "actions_decisions": [],
+            "samples": [],
+        }
+
+    key_points = trimmed[:3]
+    risks_blockers = []
+    actions_decisions = []
+    risk_keywords = ("risk", "block", "blocked", "failure", "timeout", "panic", "stuck", "异常", "风险", "阻塞")
+    action_keywords = ("todo", "action", "next", "follow", "fix", "owner", "结论", "行动", "处理", "修复", "跟进")
+    for item in trimmed:
+        lowered = item.lower()
+        if any(keyword in lowered for keyword in risk_keywords) and item not in risks_blockers:
+            risks_blockers.append(item)
+        if any(keyword in lowered for keyword in action_keywords) and item not in actions_decisions:
+            actions_decisions.append(item)
+
+    if not risks_blockers:
+        risks_blockers = trimmed[:2]
+    if not actions_decisions:
+        actions_decisions = trimmed[:2]
+
+    return {
+        "summary": f"Collected {len(trimmed)} comments and summarized the key discussion, blockers, and actions.",
+        "key_points": key_points,
+        "risks_blockers": risks_blockers[:3],
+        "actions_decisions": actions_decisions[:3],
+        "samples": trimmed[:3],
     }

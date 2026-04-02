@@ -93,6 +93,7 @@ class MarkdownDocument:
     markdown_path: str
     content: str
     updated_at: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -101,11 +102,41 @@ class DocChunk:
     source_path: str
     source_type: str
     doc_title: str
-    section_path: list[str]
     page_or_sheet: str | None
-    content: str
-    tags: list[str]
     updated_at: str
+    source_id: str = ""
+    page_title: str = ""
+    section_path: list[str] = field(default_factory=list)
+    heading_path: list[str] = field(default_factory=list)
+    space_key: str | None = None
+    page_id: str | None = None
+    ancestor_titles: list[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
+    authors: list[str] = field(default_factory=list)
+    comment_snippets: list[str] = field(default_factory=list)
+    content: str = ""
+    raw_text: str = ""
+    context_prefix: str = ""
+    retrieval_text: str = ""
+    exact_terms: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    metadata_json: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.heading_path and self.section_path:
+            self.heading_path = list(self.section_path)
+        if not self.section_path and self.heading_path:
+            self.section_path = list(self.heading_path)
+        if not self.page_title:
+            self.page_title = self.doc_title
+        if not self.raw_text:
+            self.raw_text = self.content
+        if not self.retrieval_text:
+            self.retrieval_text = self.context_prefix + ("\n---\n" if self.context_prefix and self.raw_text else "") + self.raw_text
+        if not self.content:
+            self.content = self.raw_text
+        if not self.source_id:
+            self.source_id = self.source_path or self.chunk_id
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -229,6 +260,10 @@ class IssueDeepAnalysisResult:
     spec_relations: list[str]
     policy_relations: list[str]
     related_jira_designs: list[str]
+    comment_summary: str
+    comment_key_points: list[str]
+    comment_risks_blockers: list[str]
+    comment_actions_decisions: list[str]
     suspected_problems: list[str]
     next_actions: list[str]
     open_questions: list[str]
@@ -244,6 +279,10 @@ class IssueDeepAnalysisResult:
             "spec_relations": self.spec_relations,
             "policy_relations": self.policy_relations,
             "related_jira_designs": self.related_jira_designs,
+            "comment_summary": self.comment_summary,
+            "comment_key_points": self.comment_key_points,
+            "comment_risks_blockers": self.comment_risks_blockers,
+            "comment_actions_decisions": self.comment_actions_decisions,
             "suspected_problems": self.suspected_problems,
             "next_actions": self.next_actions,
             "open_questions": self.open_questions,

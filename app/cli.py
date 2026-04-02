@@ -11,11 +11,11 @@ from app.config import AppConfig, load_config
 from app.confluence import ConfluenceCrawler
 from app.crawler import JiraCrawler, derive_issue_deltas, iter_snapshot_dates, reconstruct_snapshot_issues
 from app.demo import build_demo_chunks, build_demo_issues
-from app.docs import BM25Index, DocumentConverter
+from app.docs import DocumentConverter
 from app.jira_knowledge import build_jira_chunks, filter_product_doc_chunks
 from app.management import build_management_summary, write_management_summary_files
-from app.models import infer_team_from_issue_key
 from app.qa import answer_question
+from app.retrieval import build_retriever
 from app.reporting import build_daily_report, render_markdown, write_report_files
 from app.repository import Repository
 
@@ -30,7 +30,7 @@ def _filter_issues_by_team(issues, team_filter: str | None):
     if not team_filter:
         return issues
     normalized = team_filter.upper()
-    return [issue for issue in issues if (issue.team or infer_team_from_issue_key(issue.issue_key)) == normalized]
+    return [issue for issue in issues if (issue.team or "").upper() == normalized]
 
 
 def incremental_sync(config_path: str | None = None) -> None:
@@ -101,6 +101,7 @@ def build_docs(config_path: str | None = None) -> None:
         jira_chunks = build_jira_chunks(repo, config.docs)
         all_chunks = local_chunks + confluence_chunks + jira_chunks
         repo.save_doc_chunks(all_chunks)
+        build_retriever(config, all_chunks)
         repo.update_run(
             run_id,
             "success",
@@ -169,7 +170,13 @@ def analyze(report_date: str | None = None, config_path: str | None = None) -> N
         stale_keys = {key for key in stale_keys if key in issue_keys}
         report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config)
         chunks = filter_product_doc_chunks(repo.load_doc_chunks())
-        daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, BM25Index(chunks), issues)
+        daily_analysis, issue_analyses = analyze_daily_report(
+            config,
+            report_obj,
+            build_retriever(config, chunks),
+            issues,
+            repo=repo,
+        )
         repo.save_daily_analysis(daily_analysis)
         repo.save_issue_analyses(issue_analyses)
         repo.update_run(run_id, "success", f"Analyzed {len(issue_analyses)} priority issues")
@@ -221,7 +228,7 @@ def ask(question: str, config_path: str | None = None, top_k: int = 5) -> None:
     chunks = filter_product_doc_chunks(repo.load_doc_chunks())
     if not chunks:
         raise RuntimeError("No document chunks found. Run `python -m app.cli build-docs` first.")
-    result = answer_question(config, BM25Index(chunks), question, top_k=top_k)
+    result = answer_question(config, build_retriever(config, chunks), question, top_k=top_k, repo=repo)
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 
 

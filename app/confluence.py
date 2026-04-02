@@ -21,9 +21,26 @@ class _HTMLToMarkdownParser(HTMLParser):
         self.list_stack: list[str] = []
         self.current_href: str | None = None
         self.current_heading_level: int | None = None
+        self.in_code = False
+        self.in_pre = False
+        self.in_table = False
+        self.current_cell: list[str] = []
+        self.current_row: list[str] = []
+        self.table_rows: list[list[str]] = []
+        self.panel_kind: str | None = None
+        self.panel_buffer: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attrs_map = dict(attrs)
+        if tag == "ac:structured-macro":
+            macro_name = attrs_map.get("ac:name", "").lower()
+            if macro_name in {"info", "note", "warning", "tip"}:
+                self.panel_kind = macro_name.upper()
+                self.panel_buffer = []
+            if macro_name in {"toc", "children", "contributors", "contentbylabel", "pagetree"}:
+                self.panel_kind = "IGNORE"
+                self.panel_buffer = []
+            return
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self._ensure_break()
             self.current_heading_level = int(tag[1])
@@ -42,7 +59,21 @@ class _HTMLToMarkdownParser(HTMLParser):
         elif tag == "a":
             self.current_href = attrs_map.get("href")
         elif tag == "code":
+            self.in_code = True
             self.lines.append("`")
+        elif tag == "pre":
+            self._ensure_break()
+            self.in_pre = True
+            self.lines.append("```text\n")
+        elif tag == "table":
+            self._ensure_break()
+            self.in_table = True
+            self.current_row = []
+            self.table_rows = []
+        elif tag == "tr" and self.in_table:
+            self.current_row = []
+        elif tag in {"td", "th"} and self.in_table:
+            self.current_cell = []
 
     def handle_endtag(self, tag: str) -> None:
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li"}:
@@ -56,10 +87,44 @@ class _HTMLToMarkdownParser(HTMLParser):
             self.current_href = None
         elif tag == "code":
             self.lines.append("`")
+            self.in_code = False
+        elif tag == "pre":
+            if not self.lines or not self.lines[-1].endswith("\n"):
+                self.lines.append("\n")
+            self.lines.append("```\n")
+            self.in_pre = False
+        elif tag in {"td", "th"} and self.in_table:
+            cell = "".join(self.current_cell).strip()
+            self.current_row.append(cell)
+            self.current_cell = []
+        elif tag == "tr" and self.in_table:
+            if any(cell for cell in self.current_row):
+                self.table_rows.append(list(self.current_row))
+            self.current_row = []
+        elif tag == "table":
+            for row in self.table_rows:
+                if row:
+                    self.lines.append("- " + " | ".join(cell for cell in row if cell) + "\n")
+            self.in_table = False
+            self.table_rows = []
+        elif tag == "ac:structured-macro":
+            if self.panel_kind and self.panel_kind != "IGNORE":
+                content = " ".join("".join(self.panel_buffer).split())
+                if content:
+                    self._ensure_break()
+                    self.lines.append(f"> [{self.panel_kind}] {content}\n")
+            self.panel_kind = None
+            self.panel_buffer = []
 
     def handle_data(self, data: str) -> None:
         text = html.unescape(data)
         if not text.strip():
+            return
+        if self.panel_kind:
+            self.panel_buffer.append(text)
+            return
+        if self.in_table:
+            self.current_cell.append(text)
             return
         self.lines.append(text)
         if self.current_href and text.strip():
@@ -122,7 +187,7 @@ class ConfluenceCrawler:
                 space=space_key,
                 start=start,
                 limit=min(page_size, self.config.page_limit - fetched),
-                expand="body.storage,version,ancestors,space",
+                expand="body.storage,version,version.by,ancestors,space,metadata.labels,comments.body.storage",
                 status="current",
             ) or []
             if not batch:
@@ -148,6 +213,7 @@ class ConfluenceCrawler:
         markdown_path.parent.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text(markdown, encoding="utf-8")
         updated_at = ((((page.get("version") or {}).get("when")) or utc_now_iso()))
+        metadata = self._extract_page_metadata(page, title, space_key, page_id, ancestors)
         return MarkdownDocument(
             document_id=f"confluence-{space_key.lower()}-{page_id}",
             source_path=self._page_web_url(page),
@@ -156,6 +222,7 @@ class ConfluenceCrawler:
             markdown_path=str(markdown_path.resolve()),
             content=markdown,
             updated_at=updated_at,
+            metadata=metadata,
         )
 
     def _render_page_markdown(
@@ -166,10 +233,9 @@ class ConfluenceCrawler:
         ancestors: list[str],
         page: dict,
     ) -> str:
-        parser = _HTMLToMarkdownParser()
         body_html = (((page.get("body") or {}).get("storage") or {}).get("value")) or ""
-        parser.feed(body_html)
-        content = parser.get_markdown()
+        content = storage_to_markdownish(body_html)
+        metadata = self._extract_page_metadata(page, title, space_key, page_id, ancestors)
         lines = [
             f"# {title}",
             "",
@@ -179,6 +245,8 @@ class ConfluenceCrawler:
             f"- Page ID: {page_id}",
             f"- URL: {self._page_web_url(page)}",
             f"- Ancestors: {' / '.join(ancestors) if ancestors else 'None'}",
+            f"- Labels: {', '.join(metadata['labels']) if metadata['labels'] else 'None'}",
+            f"- Authors: {', '.join(metadata['authors']) if metadata['authors'] else 'Unknown'}",
             f"- Updated At: {(((page.get('version') or {}).get('when')) or 'Unknown')}",
             "",
             "## Content",
@@ -186,6 +254,44 @@ class ConfluenceCrawler:
             "",
         ]
         return "\n".join(lines)
+
+    def _extract_page_metadata(
+        self,
+        page: dict,
+        title: str,
+        space_key: str,
+        page_id: str,
+        ancestors: list[str],
+    ) -> dict[str, object]:
+        labels = []
+        metadata_labels = (((page.get("metadata") or {}).get("labels")) or {})
+        for item in metadata_labels.get("results", []) if isinstance(metadata_labels, dict) else []:
+            name = item.get("name")
+            if name:
+                labels.append(str(name))
+        comment_snippets = []
+        for item in (((page.get("comments") or {}).get("results")) or []):
+            snippet = (((item.get("body") or {}).get("storage") or {}).get("value")) or item.get("body", "")
+            if snippet:
+                comment_snippets.append(clean_html_text(str(snippet))[:180])
+        authors = []
+        author = (((page.get("version") or {}).get("by")) or {})
+        if isinstance(author, dict):
+            for key in ("displayName", "email", "username", "publicName"):
+                if author.get(key):
+                    authors.append(str(author[key]))
+                    break
+        return {
+            "source_id": f"confluence:{page_id}",
+            "space_key": space_key,
+            "page_id": page_id,
+            "page_title": title,
+            "ancestor_titles": ancestors,
+            "labels": labels,
+            "authors": authors,
+            "comment_snippets": comment_snippets,
+            "url": self._page_web_url(page),
+        }
 
     def _build_client(self):
         if not self.config.base_url.strip():
@@ -255,3 +361,17 @@ class ConfluenceCrawler:
 
 def _slugify(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", text.strip()).strip("-").lower() or "confluence-page"
+
+
+def clean_html_text(storage_html: str) -> str:
+    if not storage_html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", storage_html)
+    text = html.unescape(text)
+    return " ".join(text.split())
+
+
+def storage_to_markdownish(storage_html: str) -> str:
+    parser = _HTMLToMarkdownParser()
+    parser.feed(storage_html or "")
+    return parser.get_markdown()

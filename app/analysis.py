@@ -10,6 +10,8 @@ from app.config import AppConfig
 from app.docs import BM25Index, SearchHit
 from app.models import DailyAIAnalysis, DailyReport, IssueAIAnalysis, IssueRecord
 from app.prompts import scenario_system_prompt
+from app.retrieval import HybridRetriever
+from app.repository import Repository
 
 
 class LLMClient:
@@ -44,7 +46,13 @@ class LLMClient:
         return json.loads(payload["choices"][0]["message"]["content"])
 
 
-def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index: BM25Index, issues: list[IssueRecord]) -> tuple[DailyAIAnalysis, list[IssueAIAnalysis]]:
+def analyze_daily_report(
+    config: AppConfig,
+    report: DailyReport,
+    knowledge_index: BM25Index | HybridRetriever,
+    issues: list[IssueRecord],
+    repo: Repository | None = None,
+) -> tuple[DailyAIAnalysis, list[IssueAIAnalysis]]:
     issue_map = {issue.issue_key: issue for issue in issues}
     issue_analyses: list[IssueAIAnalysis] = []
     issue_context = []
@@ -55,7 +63,7 @@ def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index
             if not issue:
                 continue
             query = _build_issue_query(issue)
-            hits = knowledge_index.search(query, top_k=5)
+            hits = search_knowledge(knowledge_index, query, top_k=5, repo=repo)
             analysis = _analyze_issue(client, report.report_date, issue, hits)
             issue_analyses.append(analysis)
             issue_context.append(analysis.to_dict())
@@ -67,7 +75,7 @@ def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index
         )
         daily_analysis = DailyAIAnalysis(
             report_date=report.report_date,
-            overall_health=daily_response.get("overall_health", "Insufficient evidence"),
+            overall_health=daily_response.get("overall_health", "证据不足，无法得出稳定结论"),
             top_risks=_ensure_list(daily_response.get("top_risks")),
             suspected_root_causes=_ensure_list(daily_response.get("suspected_root_causes")),
             recommended_actions=_ensure_list(daily_response.get("recommended_actions")),
@@ -76,7 +84,7 @@ def analyze_daily_report(config: AppConfig, report: DailyReport, knowledge_index
         )
         return daily_analysis, issue_analyses
     except (RequestException, ValueError, KeyError):
-        return _fallback_daily_analysis(report, knowledge_index, issues)
+        return _fallback_daily_analysis(report, knowledge_index, issues, repo=repo)
 
 
 def _analyze_issue(client: LLMClient, report_date: str, issue: IssueRecord, hits) -> IssueAIAnalysis:
@@ -89,8 +97,9 @@ def _analyze_issue(client: LLMClient, report_date: str, issue: IssueRecord, hits
                     {
                         "score": hit.score,
                         "source_path": hit.chunk.source_path,
-                        "section_path": hit.chunk.section_path,
-                        "content": hit.chunk.content,
+                        "page_title": hit.chunk.page_title,
+                        "heading_path": hit.chunk.heading_path,
+                        "content": hit.chunk.raw_text,
                     }
                     for hit in hits
                 ],
@@ -121,7 +130,12 @@ def _ensure_list(value: Any) -> list[str]:
     return [str(value)]
 
 
-def _fallback_daily_analysis(report: DailyReport, knowledge_index: BM25Index, issues: list[IssueRecord]) -> tuple[DailyAIAnalysis, list[IssueAIAnalysis]]:
+def _fallback_daily_analysis(
+    report: DailyReport,
+    knowledge_index: BM25Index | HybridRetriever,
+    issues: list[IssueRecord],
+    repo: Repository | None = None,
+) -> tuple[DailyAIAnalysis, list[IssueAIAnalysis]]:
     issue_map = {issue.issue_key: issue for issue in issues}
     issue_analyses: list[IssueAIAnalysis] = []
     top_risks: list[str] = []
@@ -132,10 +146,7 @@ def _fallback_daily_analysis(report: DailyReport, knowledge_index: BM25Index, is
         issue = issue_map.get(item.issue_key)
         if not issue:
             continue
-        hits = knowledge_index.search(
-            _build_issue_query(issue),
-            top_k=3,
-        )
+        hits = search_knowledge(knowledge_index, _build_issue_query(issue), top_k=3, repo=repo)
         analysis = _fallback_issue_analysis(report.report_date, issue, hits)
         issue_analyses.append(analysis)
         top_risks.append(f"{issue.issue_key}: {issue.status} | {issue.summary}")
@@ -156,9 +167,9 @@ def _fallback_daily_analysis(report: DailyReport, knowledge_index: BM25Index, is
 
 
 def _fallback_issue_analysis(report_date: str, issue: IssueRecord, hits: list[SearchHit]) -> IssueAIAnalysis:
-    evidence = [f"{hit.chunk.doc_title} [{'/'.join(hit.chunk.section_path)}]" for hit in hits]
+    evidence = [f"{hit.chunk.page_title or hit.chunk.doc_title} [{'/'.join(hit.chunk.heading_path)}]" for hit in hits]
     suspected_root_cause = (
-        hits[0].chunk.content.split(".")[0].strip() if hits else "Insufficient evidence from local knowledge hits"
+        hits[0].chunk.content.split(".")[0].strip() if hits else "本地知识库证据不足，暂时无法定位稳定根因"
     )
     action_needed = []
     if "block" in issue.status.lower():
@@ -176,11 +187,22 @@ def _fallback_issue_analysis(report_date: str, issue: IssueRecord, hits: list[Se
         issue_key=issue.issue_key,
         summary=issue.summary,
         suspected_root_cause=suspected_root_cause,
-        evidence=evidence or ["No matching local design note found"],
+        evidence=evidence or ["未检索到匹配的本地设计或规范证据"],
         action_needed=action_needed,
         confidence="medium" if hits else "low",
         raw_response="offline-fallback",
     )
+
+
+def search_knowledge(
+    index: BM25Index | HybridRetriever,
+    query: str,
+    top_k: int = 5,
+    repo: Repository | None = None,
+) -> list[SearchHit]:
+    if isinstance(index, HybridRetriever):
+        return index.retrieve(query, top_k=top_k, repo=repo).top_hits
+    return index.search(query, top_k=top_k)
 
 
 def _build_issue_query(issue: IssueRecord) -> str:
@@ -203,6 +225,7 @@ def _build_issue_query(issue: IssueRecord) -> str:
 
 
 def _issue_fact_sheet(issue: IssueRecord) -> dict[str, Any]:
+    comment_samples = [" ".join(comment.split())[:240] for comment in issue.comments[:3] if comment.strip()]
     return {
         "type": issue.issue_type,
         "severity": issue.severity,
@@ -215,4 +238,6 @@ def _issue_fact_sheet(issue: IssueRecord) -> dict[str, Any]:
         "blocks_links": issue.blocks_links,
         "fix_versions": issue.fix_versions,
         "affects_versions": issue.affects_versions,
+        "comments_count": len(issue.comments),
+        "comment_samples": comment_samples,
     }
