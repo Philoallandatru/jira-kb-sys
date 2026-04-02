@@ -131,6 +131,20 @@ streamlit run app/ui.py
 
 ## Common CLI Workflows
 
+### Offline Demo Seed
+
+Use this when the real Jira / Confluence systems are only reachable from an intranet and the current development machine cannot access them.
+
+```bash
+python -m app.cli seed-demo
+```
+
+`seed-demo` creates:
+
+- demo Jira snapshots for today and yesterday
+- derived delta records
+- local markdown chunks for retrieval and QA
+
 ### Incremental Jira Sync
 
 ```bash
@@ -168,6 +182,39 @@ python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV
 ```
+
+### Offline Mock Validation Flow
+
+If you are developing outside the intranet, validate the product with demo data instead of real integration calls.
+
+As of `2026-04-03`, the expected seeded dates are:
+
+- `2026-04-02`
+- `2026-04-03`
+
+Recommended order:
+
+```bash
+python -m app.cli seed-demo
+python -m app.cli analyze --date 2026-04-03
+python -m app.cli report --date 2026-04-03
+python -m app.cli management-summary --date-from 2026-04-02 --date-to 2026-04-03
+python -m app.api
+```
+
+Then verify:
+
+- `GET /health`
+- `GET /dashboard/overview`
+- `GET /reports/daily`
+- `GET /issues`
+- `GET /issues/{issue_key}`
+- `GET /issues/{issue_key}/deep-analysis`
+- `POST /docs/upload`
+- `POST /qa/docs`
+- `POST /qa/jira-docs`
+
+If the local machine is missing WeasyPrint native libraries, the CLI will still write `markdown / json / html` outputs. PDF export is optional in local development and may be skipped.
 
 ## Common API Tasks
 

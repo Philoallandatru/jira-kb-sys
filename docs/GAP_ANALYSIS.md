@@ -1,102 +1,118 @@
-# 差距分析
+# Gap Analysis
 
-## 已完成范围
+## Completed Scope
 
-### 第一阶段
+### Product Surface
 
-- 中文界面
-- 默认中文 Prompt
-- 管理层摘要 CLI / API / 前端页面
-- 独立前端骨架
-- Dashboard 页面
-- Daily Reports 页面
-- Jira 列表、详情与单 Jira 深度分析页面
-- Prompt Settings 页面
+- FastAPI backend with task endpoints, reporting endpoints, issue APIs, and QA APIs
+- Next.js frontend for dashboard, reports, issues, tasks, QA, and settings
+- Streamlit compatibility UI retained for local and legacy usage
+- Project-management summary workflow exposed through CLI, API, and frontend
 
-### 第二阶段
+### Jira Data Pipeline
 
-- `management_summary` 独立场景
-- 单 Jira 深度分析独立链路
-- Prompt 场景配置与场景级输出长度
-- Jira changelog 事件持久化
-- Docs QA 与 Jira Docs QA 独立前端页面
-- 通用任务中心第一版
-- 增量同步 / 全量同步任务入口
-- Jira 快照与 AI 分析进入统一知识切块链路
-- Jira + Docs 联合检索
-- 持久化任务队列与应用内 worker
-- Jira 连通性检查接口与前端按钮
+- incremental sync
+- full-sync over a date range
+- current snapshot persistence
+- historical snapshot reconstruction from changelog replay
+- derived change-event persistence
+- structured Jira field extraction into `IssueRecord`
 
-## 当前已补齐的能力
+### Document and Retrieval Pipeline
 
-### 同步与回补
+- local document conversion and chunking
+- Confluence ingestion by configured spaces
+- Jira knowledge chunk generation
+- hybrid retrieval with BM25, dense recall, fusion, and rerank fallback behavior
+- Docs QA and Jira + Docs QA split into separate flows
 
-- `POST /tasks/sync/incremental`
-- `POST /tasks/sync/full`
-- `POST /tasks/crawl`
-- CLI `incremental-sync`
-- CLI `full-sync --date-from --date-to`
-- full-sync 支持按日期区间回补
-- full-sync 使用 changelog 对当前 issue 做历史近似重建
+### Analysis and Reporting
 
-### 知识库与问答
+- daily report generation
+- issue deep analysis
+- management summary generation
+- AI fallback logic when the LLM endpoint is unavailable
+- markdown, json, and html export for reports and management summaries
 
-- `build-docs` 同时构建产品文档 chunks 与 Jira knowledge chunks
-- Docs QA 只检索产品文档 chunks
-- Jira Docs QA 混合检索产品文档 chunks 与 Jira knowledge chunks
-- 单 Jira 深度分析只使用产品文档 chunks 做 spec / policy 对照
+### Runtime and Reliability
 
-### 任务执行
+- persisted task queue in SQLite
+- worker restart recovery for interrupted runs
+- retry tracking in `runs`
+- local offline validation through `seed-demo`
+- graceful degradation when WeasyPrint native libraries are missing
 
-- API 任务先入库再执行
-- `runs` 持久化保存 payload、开始/结束时间、尝试次数、最后错误
-- 应用启动时会回收中断的 `running` 任务
-- worker 会自动重试失败任务，默认最多 3 次
-- 前端任务中心可查看创建时间、开始时间、结束时间、尝试次数和最后错误
+## Current Gaps
 
-### 运维与排错
+### 1. Historical Sync Is Reconstructed, Not Native Snapshot Export
 
-- 增加了 `GET /integrations/jira/health`
-- 任务页可直接点击 `Check Jira Connection`
-- 文档已同时给出 Windows PowerShell 与 Linux / bash 的环境变量设置方法
-- 前端请求错误会包含实际请求 URL，便于排查错误的 API base URL
+`full-sync` is useful for backfill, but it is still based on replaying changelog data from the currently reachable issue set.
 
-## 仍然存在的边界
+Implications:
 
-### 1. full-sync 不是 Jira 官方历史快照
+- accuracy depends on Jira changelog completeness
+- issues filtered out by current JQL are not recoverable through replay
+- very old field states may not be perfectly reproducible
 
-当前 full-sync 的语义已经从“伪全量”提升成“可回补日期区间”，但它仍然不是 Jira 官方快照源。
+### 2. Task Execution Is Still Single-Process
 
-限制包括：
+The task model is no longer request-bound, but it is still an in-process worker design.
 
-- 历史状态依赖当前 issue 数据和 changelog 回放
-- 如果 JQL 本身排除了某些老单，这些数据依然回补不回来
-- 无法保证对非常早期字段状态做到完全精确复原
+Missing capabilities:
 
-### 2. 任务系统仍是单进程 worker
+- multi-worker scheduling
+- distributed queue backend
+- dead-letter handling
+- cancellation
+- task priority
+- configurable retry backoff
+- process isolation for long-running jobs
 
-当前已经不是请求绑定的 `BackgroundTasks`，但还不是完整的独立任务系统。
+### 3. Real Integration Validation Is Environment-Bound
 
-还没做的能力：
+The project now supports an offline demo workflow, but real Jira and Confluence validation still depends on an intranet-capable environment.
 
-- 多 worker 并发调度
-- 分布式队列
-- 死信队列
-- 任务取消
-- 任务优先级
-- 指数退避或可配置重试策略
-- 真正的跨进程执行隔离
+What this means in practice:
 
-### 3. 管理层摘要历史能力仍可增强
+- local development can validate behavior, not real connectivity
+- health checks only become meaningful with real credentials and network access
+- production-like verification still needs a separately connected environment
 
-当前已经有生成、落库和页面展示，但还没有：
+### 4. Export Layer Still Has an Optional Dependency Boundary
 
-- 历史版本对比
-- 多次生成结果 diff
-- 摘要版本回溯
+Daily report and management summary export now succeed without PDF generation, but native PDF output still depends on local WeasyPrint system libraries.
 
-## 建议后续顺序
+Current behavior:
 
-1. 如果要继续补可靠性，优先把任务执行迁移到独立 worker / queue。
-2. 如果要继续补数据准确性，优先评估是否能拿到 Jira 官方历史快照来源。
-3. 如果要继续补产品能力，优先做 management summary 历史版本对比。
+- `markdown`, `json`, and `html` always write
+- `pdf` is skipped if native libraries are unavailable
+
+### 5. Some Compatibility-Layer Copy Is Still Transitional
+
+The compatibility Streamlit page and parts of the export template were stabilized for readability after earlier encoding issues, but they are not yet the final product copy.
+
+Primary files:
+
+- [ui.py](/E:/Code/AI/codex/pr-agent/jira-summary/app/ui.py)
+- [management_summary.html](/E:/Code/AI/codex/pr-agent/jira-summary/templates/management_summary.html)
+
+## Recommended Next Order
+
+1. Finalize compatibility-layer and export-template copy.
+2. Validate the same workflows in an intranet-connected environment with real Jira and Confluence credentials.
+3. If reliability becomes a priority, move task execution to an external queue / worker model.
+4. If data accuracy becomes a priority, evaluate whether native historical snapshot sources are available from Jira.
+
+## Practical Conclusion
+
+The codebase is now in a usable local-development state:
+
+- frontend build passes
+- full test suite passes
+- offline mock validation works end to end
+
+The remaining work is mainly:
+
+- production-environment validation
+- wording and polish
+- scaling and operational hardening

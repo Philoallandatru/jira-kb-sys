@@ -163,6 +163,7 @@ pip install -e .[retrieval]
 
 ```powershell
 $env:PYTHONPATH='.'
+python -m app.cli seed-demo
 python -m app.cli incremental-sync
 python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
 python -m app.cli sync-confluence
@@ -178,6 +179,7 @@ python -m app.api
 
 ```bash
 export PYTHONPATH=.
+python -m app.cli seed-demo
 python -m app.cli incremental-sync
 python -m app.cli full-sync --date-from 2026-03-25 --date-to 2026-03-31
 python -m app.cli sync-confluence
@@ -188,6 +190,61 @@ python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31
 python -m app.cli ask "Which Jira item is blocked by reset ordering validation?"
 python -m app.api
 ```
+
+## Offline Mock Development
+
+If Jira and Confluence are only reachable from an intranet, use the built-in demo dataset during local development.
+
+`seed-demo` writes:
+
+- two Jira snapshot days into SQLite
+- matching delta records
+- three markdown knowledge chunks into `docs/markdown`
+
+As of `2026-04-03`, the seeded snapshot dates are expected to be:
+
+- `2026-04-02`
+- `2026-04-03`
+
+Recommended offline validation flow:
+
+### Windows PowerShell
+
+```powershell
+$env:PYTHONPATH='.'
+python -m app.cli seed-demo
+python -m app.cli analyze --date 2026-04-03
+python -m app.cli report --date 2026-04-03
+python -m app.cli management-summary --date-from 2026-04-02 --date-to 2026-04-03
+python -m app.api
+cd frontend
+$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
+npm run dev
+```
+
+### Linux / bash
+
+```bash
+export PYTHONPATH=.
+python -m app.cli seed-demo
+python -m app.cli analyze --date 2026-04-03
+python -m app.cli report --date 2026-04-03
+python -m app.cli management-summary --date-from 2026-04-02 --date-to 2026-04-03
+python -m app.api
+cd frontend
+export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+npm run dev
+```
+
+This mode is enough to verify:
+
+- dashboard and issue APIs
+- daily report generation
+- project-management summary generation
+- docs upload and QA endpoints
+- frontend integration against the local FastAPI server
+
+If WeasyPrint native libraries are not installed on the development machine, daily report and management summary export will still generate `markdown / json / html`, and only PDF output will be skipped.
 
 ## FastAPI Endpoints
 

@@ -157,10 +157,11 @@ def render_management_pdf(result: ManagementSummaryResult, html_path: Path, pdf_
     html_path.write_text(html, encoding="utf-8")
     try:
         from weasyprint import HTML
-    except ImportError:
+
+        HTML(string=html).write_pdf(str(pdf_path))
+        return True
+    except (ImportError, OSError):
         return False
-    HTML(string=html).write_pdf(str(pdf_path))
-    return True
 
 
 def _select_recent_issues(issues: list[IssueRecord], deltas: list[IssueDelta], request: ManagementSummaryRequest) -> list[IssueRecord]:

@@ -139,7 +139,8 @@ def render_pdf(config: AppConfig, report: DailyReport, daily_analysis: DailyAIAn
     html_path.write_text(html, encoding="utf-8")
     try:
         from weasyprint import HTML
-    except ImportError as exc:
+
+        HTML(string=html).write_pdf(str(pdf_path))
+        return True
+    except (ImportError, OSError):
         return False
-    HTML(string=html).write_pdf(str(pdf_path))
-    return True
