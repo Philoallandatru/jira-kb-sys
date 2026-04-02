@@ -18,6 +18,7 @@ from app.models import (
     ManagementSummaryRequest,
     ManagementSummaryResult,
 )
+from app.retrieval.schema import RetrievalResult
 
 
 class Repository:
@@ -80,14 +81,56 @@ class Repository:
                 );
                 CREATE TABLE IF NOT EXISTS doc_chunks (
                     chunk_id TEXT PRIMARY KEY,
+                    source_id TEXT,
                     source_path TEXT NOT NULL,
                     source_type TEXT NOT NULL,
                     doc_title TEXT NOT NULL,
                     section_path_json TEXT NOT NULL,
+                    heading_path_json TEXT,
                     page_or_sheet TEXT,
+                    page_title TEXT,
+                    space_key TEXT,
+                    page_id TEXT,
+                    ancestor_titles_json TEXT,
+                    labels_json TEXT,
+                    authors_json TEXT,
+                    comment_snippets_json TEXT,
                     content TEXT NOT NULL,
+                    raw_text TEXT,
+                    context_prefix TEXT,
+                    retrieval_text TEXT,
+                    exact_terms_json TEXT,
                     tags_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    metadata_json TEXT
+                );
+                CREATE TABLE IF NOT EXISTS retrieval_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question TEXT NOT NULL,
+                    query_type TEXT NOT NULL,
+                    plan_json TEXT NOT NULL,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS retrieval_candidates (
+                    retrieval_run_id INTEGER NOT NULL,
+                    stage TEXT NOT NULL,
+                    rank INTEGER NOT NULL,
+                    chunk_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY (retrieval_run_id, stage, rank)
+                );
+                CREATE TABLE IF NOT EXISTS qa_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    question TEXT NOT NULL,
+                    issue_key TEXT,
+                    selected_chunk_ids_json TEXT NOT NULL,
+                    root_cause TEXT,
+                    accepted INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS ai_analysis_daily (
                     report_date TEXT PRIMARY KEY,
@@ -111,6 +154,20 @@ class Repository:
             self._ensure_column(conn, "runs", "last_error", "TEXT")
             self._ensure_column(conn, "runs", "started_at", "TEXT")
             self._ensure_column(conn, "runs", "finished_at", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "source_id", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "heading_path_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "page_title", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "space_key", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "page_id", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "ancestor_titles_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "labels_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "authors_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "comment_snippets_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "raw_text", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "context_prefix", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "retrieval_text", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "exact_terms_json", "TEXT")
+            self._ensure_column(conn, "doc_chunks", "metadata_json", "TEXT")
             conn.commit()
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -413,20 +470,36 @@ class Repository:
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO doc_chunks (
-                        chunk_id, source_path, source_type, doc_title, section_path_json,
-                        page_or_sheet, content, tags_json, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        chunk_id, source_id, source_path, source_type, doc_title, section_path_json,
+                        heading_path_json, page_or_sheet, page_title, space_key, page_id, ancestor_titles_json,
+                        labels_json, authors_json, comment_snippets_json, content, raw_text, context_prefix,
+                        retrieval_text, exact_terms_json, tags_json, updated_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chunk.chunk_id,
+                        chunk.source_id,
                         chunk.source_path,
                         chunk.source_type,
                         chunk.doc_title,
                         json.dumps(chunk.section_path, ensure_ascii=False),
+                        json.dumps(chunk.heading_path, ensure_ascii=False),
                         chunk.page_or_sheet,
+                        chunk.page_title,
+                        chunk.space_key,
+                        chunk.page_id,
+                        json.dumps(chunk.ancestor_titles, ensure_ascii=False),
+                        json.dumps(chunk.labels, ensure_ascii=False),
+                        json.dumps(chunk.authors, ensure_ascii=False),
+                        json.dumps(chunk.comment_snippets, ensure_ascii=False),
                         chunk.content,
+                        chunk.raw_text,
+                        chunk.context_prefix,
+                        chunk.retrieval_text,
+                        json.dumps(chunk.exact_terms, ensure_ascii=False),
                         json.dumps(chunk.tags, ensure_ascii=False),
                         chunk.updated_at,
+                        json.dumps(chunk.metadata_json, ensure_ascii=False),
                     ),
                 )
             conn.commit()
@@ -437,17 +510,119 @@ class Repository:
         return [
             DocChunk(
                 chunk_id=row["chunk_id"],
+                source_id=row["source_id"] or row["source_path"] or row["chunk_id"],
                 source_path=row["source_path"],
                 source_type=row["source_type"],
                 doc_title=row["doc_title"],
                 section_path=json.loads(row["section_path_json"]),
+                heading_path=json.loads(row["heading_path_json"]) if row["heading_path_json"] else json.loads(row["section_path_json"]),
                 page_or_sheet=row["page_or_sheet"],
+                page_title=row["page_title"] or row["doc_title"],
+                space_key=row["space_key"],
+                page_id=row["page_id"],
+                ancestor_titles=json.loads(row["ancestor_titles_json"]) if row["ancestor_titles_json"] else [],
+                labels=json.loads(row["labels_json"]) if row["labels_json"] else [],
+                authors=json.loads(row["authors_json"]) if row["authors_json"] else [],
+                comment_snippets=json.loads(row["comment_snippets_json"]) if row["comment_snippets_json"] else [],
                 content=row["content"],
+                raw_text=row["raw_text"] or row["content"],
+                context_prefix=row["context_prefix"] or "",
+                retrieval_text=row["retrieval_text"] or row["content"],
+                exact_terms=json.loads(row["exact_terms_json"]) if row["exact_terms_json"] else [],
                 tags=json.loads(row["tags_json"]),
                 updated_at=row["updated_at"],
+                metadata_json=json.loads(row["metadata_json"]) if row["metadata_json"] else {},
             )
             for row in rows
         ]
+
+    def save_retrieval_run(self, result: RetrievalResult) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO retrieval_runs (question, query_type, plan_json, result_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    result.question,
+                    result.query_type,
+                    json.dumps(result.plan, ensure_ascii=False),
+                    json.dumps(
+                        {
+                            "bm25": [item.chunk.chunk_id for item in result.bm25_candidates],
+                            "dense": [item.chunk.chunk_id for item in result.dense_candidates],
+                            "fused": [item.chunk.chunk_id for item in result.fused_candidates],
+                            "reranked": [item.chunk.chunk_id for item in result.reranked_candidates],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            retrieval_run_id = int(cursor.lastrowid)
+            for stage_name, candidates in (
+                ("bm25", result.bm25_candidates),
+                ("dense", result.dense_candidates),
+                ("fused", result.fused_candidates),
+                ("reranked", result.reranked_candidates),
+            ):
+                for rank, item in enumerate(candidates, start=1):
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO retrieval_candidates (
+                            retrieval_run_id, stage, rank, chunk_id, source_type, score, payload_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            retrieval_run_id,
+                            stage_name,
+                            rank,
+                            item.chunk.chunk_id,
+                            item.chunk.source_type,
+                            item.final_score or item.rerank_score or item.fused_score or item.bm25_score or item.dense_score,
+                            json.dumps(
+                                {
+                                    "source_path": item.chunk.source_path,
+                                    "heading_path": item.chunk.heading_path,
+                                    "page_title": item.chunk.page_title,
+                                    "bm25_score": item.bm25_score,
+                                    "dense_score": item.dense_score,
+                                    "fused_score": item.fused_score,
+                                    "rerank_score": item.rerank_score,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
+            conn.commit()
+            return retrieval_run_id
+
+    def save_qa_feedback(
+        self,
+        question: str,
+        selected_chunk_ids: list[str],
+        *,
+        issue_key: str | None = None,
+        root_cause: str | None = None,
+        accepted: bool = False,
+        notes: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO qa_feedback (question, issue_key, selected_chunk_ids_json, root_cause, accepted, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    question,
+                    issue_key,
+                    json.dumps(selected_chunk_ids, ensure_ascii=False),
+                    root_cause,
+                    1 if accepted else 0,
+                    notes,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
 
     def save_daily_analysis(self, analysis: DailyAIAnalysis) -> None:
         with self.connect() as conn:

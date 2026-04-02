@@ -1,6 +1,6 @@
 # Jira Summary
 
-Jira Summary is a local-first Jira reporting and knowledge retrieval system. It collects Jira snapshots, stores derived history in SQLite, indexes local documents and Confluence pages into retrievable chunks, and uses an OpenAI-compatible model to generate daily reports, management summaries, issue deep analysis, and QA responses.
+Jira Summary is a local-first Jira reporting and knowledge retrieval system. It collects Jira snapshots, stores derived history in SQLite, indexes local documents and Confluence pages into retrievable chunks, and uses an OpenAI-compatible model to generate daily reports, project-management summaries, issue deep analysis, and QA responses.
 
 ## Current Capabilities
 
@@ -9,8 +9,9 @@ Jira Summary is a local-first Jira reporting and knowledge retrieval system. It 
 - Convert local `PDF / PPTX / XLSX / DOCX / Markdown` sources into chunks
 - Crawl Confluence Server pages by space using Basic + Token auth
 - Build Jira issue knowledge chunks alongside product and Confluence docs
-- Run Docs QA and Jira + Docs QA with BM25 retrieval
-- Generate daily reports, management summaries, and issue deep analysis
+- Upload local `policy / spec / markdown / office / pdf` files through the Web task center
+- Run Docs QA and Jira + Docs QA with hybrid retrieval and reranking
+- Generate daily reports, project-management summaries, and issue deep analysis
 - Expose FastAPI endpoints, CLI commands, a task queue, and a Next.js frontend
 
 ## Data Flow
@@ -32,6 +33,20 @@ All retrievable knowledge is written into `doc_chunks`, including:
   - `jira_issue`
   - `jira_issue_analysis`
   - `jira_daily_analysis`
+
+Each chunk now stores both the raw text and the retrieval-time context used by the hybrid search stack:
+
+- `raw_text`
+- `context_prefix`
+- `retrieval_text`
+- `exact_terms`
+- `page_title / heading_path / ancestor_titles / labels / authors / comment_snippets`
+
+The SQLite database also persists retrieval telemetry:
+
+- `retrieval_runs`
+- `retrieval_candidates`
+- `qa_feedback`
 
 ## Structured Jira Fields
 
@@ -86,12 +101,61 @@ confluence:
   page_limit: 500
   page_size: 50
   timeout_seconds: 45
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  cors_allow_origins:
+    - "http://127.0.0.1:3000"
+    - "http://192.168.1.10:3000"
+
+retrieval:
+  backend: "tantivy"
+  index_dir: "./data/retrieval"
+  bm25_top_k: 50
+  dense_top_k: 50
+  fused_top_k: 60
+  rerank_top_k: 10
+  enable_recency_bias: true
+  recency_half_life_days: 30
+
+embedding:
+  model_name: "BAAI/bge-small-en-v1.5"
+  batch_size: 16
+
+reranker:
+  model_name: "BAAI/bge-reranker-base"
+  max_length: 512
 ```
 
 Notes:
 
 - Jira custom fields should be configured by real `customfield_xxxxx` ids.
 - Confluence currently crawls configured spaces and optionally filters by configured root page URLs.
+- Confluence pages are normalized into markdown-ish text before indexing, preserving headings, list items, tables, code blocks, warning/info panels, and short comment summaries.
+- `IssueRecord.team` now defaults to the Jira `Report department` raw value.
+- The API binds to `0.0.0.0` by default so other machines on the same LAN can reach it.
+- If the frontend runs on another machine, set `NEXT_PUBLIC_API_BASE_URL` to the host machine LAN IP instead of `127.0.0.1`.
+
+## Retrieval Architecture
+
+The default v1 retrieval path is:
+
+`Confluence / local docs / Jira snapshots -> contextual chunks -> BM25 + dense candidate recall -> RRF fusion -> rerank -> vLLM answer generation`
+
+Implementation notes:
+
+- Confluence and local docs use section-aware chunking instead of fixed-length slicing first.
+- Every chunk gets a deterministic `context_prefix`, then `retrieval_text = context_prefix + raw_text`.
+- BM25 uses field-weighted content with exact-term boosts for issue keys, versions, script names, and error codes.
+- The dense stage is local-first and can fall back to lightweight token similarity if dedicated retrieval models are unavailable.
+- The rerank stage prefers `sentence-transformers` CrossEncoder models when installed and falls back to local heuristic reranking otherwise.
+
+Install the retrieval extras to enable the stronger local stack:
+
+```bash
+pip install -e .[retrieval]
+```
 
 ## Common Commands
 
@@ -107,7 +171,7 @@ python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
 python -m app.cli ask "Which Jira item is blocked by reset ordering validation?"
-uvicorn app.api:app --reload
+python -m app.api
 ```
 
 ### Linux / bash
@@ -122,7 +186,7 @@ python -m app.cli analyze --date 2026-03-31
 python -m app.cli report --date 2026-03-31
 python -m app.cli management-summary --date-from 2026-03-25 --date-to 2026-03-31 --team SV --jira-status Blocked
 python -m app.cli ask "Which Jira item is blocked by reset ordering validation?"
-uvicorn app.api:app --reload
+python -m app.api
 ```
 
 ## FastAPI Endpoints
@@ -130,6 +194,7 @@ uvicorn app.api:app --reload
 - `GET /health`
 - `GET /integrations/jira/health`
 - `GET /integrations/confluence/health`
+- `POST /docs/upload`
 - `GET /dashboard/overview`
 - `GET /reports/daily`
 - `GET /reports/daily/{report_date}`

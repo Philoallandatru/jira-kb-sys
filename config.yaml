@@ -43,7 +43,34 @@ docs:
   max_chunk_chars: 1800
   overlap_chars: 200
   marker_min_chars: 300
-  supported_extensions: [".pdf", ".pptx", ".xlsx", ".xls", ".docx"]
+  supported_extensions: [".pdf", ".pptx", ".xlsx", ".xls", ".docx", ".md"]
+
+retrieval:
+  backend: "tantivy"
+  index_dir: "./data/retrieval"
+  bm25_top_k: 50
+  dense_top_k: 50
+  fused_top_k: 60
+  rerank_top_k: 10
+  enable_recency_bias: true
+  recency_half_life_days: 30
+  source_type_weights:
+    jira_issue: 1.35
+    jira_issue_analysis: 0.95
+    jira_daily_analysis: 0.8
+    confluence_page: 1.2
+    local_spec: 1.25
+    local_md: 1.0
+
+embedding:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  batch_size: 16
+  device: null
+
+reranker:
+  model_name: "BAAI/bge-reranker-base"
+  max_length: 512
+  device: null
 
 storage:
   database_path: "./data/jira_summary.db"
@@ -71,6 +98,8 @@ reporting:
   team_filter: null
 
 server:
+  host: "0.0.0.0"
+  port: 8000
   cors_allow_origins:
     - "http://localhost:3000"
     - "http://127.0.0.1:3000"

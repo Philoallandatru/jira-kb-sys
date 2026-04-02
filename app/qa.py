@@ -10,6 +10,8 @@ from app.analysis import LLMClient
 from app.config import AppConfig
 from app.docs import BM25Index, SearchHit
 from app.models import DailyAIAnalysis, IssueAIAnalysis, IssueRecord
+from app.retrieval import HybridRetriever
+from app.repository import Repository
 
 
 @dataclass
@@ -37,8 +39,16 @@ class CombinedQAResult:
         return asdict(self)
 
 
-def answer_question(config: AppConfig, index: BM25Index, question: str, top_k: int = 5) -> QAResult:
-    hits = index.search(question, top_k=top_k)
+def answer_question(
+    config: AppConfig,
+    index: BM25Index | HybridRetriever,
+    question: str,
+    top_k: int = 5,
+    repo: Repository | None = None,
+) -> QAResult:
+    retrieval = _retrieve(index, question, top_k, repo=repo)
+    hits = retrieval["hits"]
+    plan = retrieval["plan"]
     citations = [_citation(hit) for hit in hits]
     try:
         client = LLMClient(config)
@@ -46,11 +56,16 @@ def answer_question(config: AppConfig, index: BM25Index, question: str, top_k: i
             prompt=json.dumps(
                 {
                     "question": question,
+                    "query_plan": plan,
                     "retrieved_context": [
                         {
                             "source_path": hit.chunk.source_path,
-                            "section_path": hit.chunk.section_path,
-                            "content": hit.chunk.content,
+                            "source_type": hit.chunk.source_type,
+                            "page_title": hit.chunk.page_title,
+                            "heading_path": hit.chunk.heading_path,
+                            "updated_at": hit.chunk.updated_at,
+                            "context_prefix": hit.chunk.context_prefix,
+                            "content": hit.chunk.raw_text,
                             "score": hit.score,
                         }
                         for hit in hits
@@ -82,7 +97,7 @@ def answer_question(config: AppConfig, index: BM25Index, question: str, top_k: i
 
 def answer_jira_docs_question(
     config: AppConfig,
-    index: BM25Index,
+    index: BM25Index | HybridRetriever,
     jira_index: BM25Index | None,
     question: str,
     issues: list[IssueRecord],
@@ -91,8 +106,15 @@ def answer_jira_docs_question(
     top_k: int = 5,
     top_issue_k: int = 5,
     top_jira_k: int = 3,
+    repo: Repository | None = None,
 ) -> CombinedQAResult:
-    hits = _merge_hits(index.search(question, top_k=top_k), jira_index.search(question, top_k=top_jira_k) if jira_index else [])
+    if isinstance(index, HybridRetriever):
+        retrieval_result = index.retrieve(question, top_k=max(top_k, top_jira_k), repo=repo)
+        hits = retrieval_result.top_hits
+        plan = retrieval_result.plan
+    else:
+        hits = _merge_hits(index.search(question, top_k=top_k), jira_index.search(question, top_k=top_jira_k) if jira_index else [])
+        plan = {"query_type": "fallback-bm25"}
     doc_citations = [_citation(hit) for hit in hits]
     jira_context = _select_relevant_issues(question, issues, issue_analyses, top_issue_k)
     try:
@@ -101,13 +123,18 @@ def answer_jira_docs_question(
             prompt=json.dumps(
                 {
                     "question": question,
+                    "query_plan": plan,
                     "daily_analysis": daily_analysis.to_dict() if daily_analysis else None,
                     "relevant_jira_items": jira_context,
                     "retrieved_context": [
                         {
                             "source_path": hit.chunk.source_path,
-                            "section_path": hit.chunk.section_path,
-                            "content": hit.chunk.content,
+                            "source_type": hit.chunk.source_type,
+                            "page_title": hit.chunk.page_title,
+                            "heading_path": hit.chunk.heading_path,
+                            "updated_at": hit.chunk.updated_at,
+                            "context_prefix": hit.chunk.context_prefix,
+                            "content": hit.chunk.raw_text,
                             "score": hit.score,
                         }
                         for hit in hits
@@ -180,8 +207,10 @@ def _citation(hit: SearchHit) -> dict[str, Any]:
     return {
         "source_type": hit.chunk.source_type,
         "source_path": hit.chunk.source_path,
-        "section_path": hit.chunk.section_path,
-        "quote": " ".join(hit.chunk.content.split())[:240],
+        "page_title": hit.chunk.page_title,
+        "section_path": hit.chunk.heading_path,
+        "updated_at": hit.chunk.updated_at,
+        "quote": " ".join(hit.chunk.raw_text.split())[:240],
         "score": hit.score,
     }
 
@@ -270,3 +299,10 @@ def _merge_hits(doc_hits: list[SearchHit], jira_hits: list[SearchHit]) -> list[S
         seen.add(hit.chunk.chunk_id)
         deduped.append(hit)
     return deduped
+
+
+def _retrieve(index: BM25Index | HybridRetriever, question: str, top_k: int, repo: Repository | None = None) -> dict[str, Any]:
+    if isinstance(index, HybridRetriever):
+        result = index.retrieve(question, top_k=top_k, repo=repo)
+        return {"hits": result.top_hits, "plan": result.plan}
+    return {"hits": index.search(question, top_k=top_k), "plan": {"query_type": "fallback-bm25"}}

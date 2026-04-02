@@ -5,9 +5,10 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, ValidationError
 
@@ -15,17 +16,19 @@ from app.analysis import analyze_daily_report
 from app.cli import _bootstrap
 from app.confluence import ConfluenceCrawler, ConfluenceError
 from app.crawler import CrawlerError, JiraCrawler
-from app.docs import BM25Index, DocumentConverter
+from app.docs import DocumentConverter
 from app.issue_details import build_issue_deep_analysis
 from app.jira_knowledge import build_jira_chunks, filter_jira_doc_chunks, filter_product_doc_chunks
 from app.management import build_management_summary, write_management_summary_files
 from app.models import ManagementSummaryRequest
 from app.qa import answer_jira_docs_question, answer_question
+from app.retrieval import build_retriever
 from app.reporting import build_daily_report, render_markdown, write_report_files
 
 
 TASK_POLL_INTERVAL_SECONDS = 1.0
 TASK_MAX_ATTEMPTS = 3
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 @asynccontextmanager
@@ -112,6 +115,13 @@ class ConfluenceConnectionResponse(BaseModel):
     sample_spaces: list[str] = Field(default_factory=list)
 
 
+class UploadDocsResponse(BaseModel):
+    saved_files: list[str]
+    destination_dir: str
+    supported_extensions: list[str]
+    message: str
+
+
 def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) -> None:
     config, repo = _bootstrap(request.config_path)
     summary_request = ManagementSummaryRequest(
@@ -180,6 +190,7 @@ def _run_build_docs(run_id: int, request: SimpleTaskRequest) -> None:
     jira_chunks = build_jira_chunks(repo, config.docs)
     all_chunks = product_chunks + confluence_chunks + jira_chunks
     repo.save_doc_chunks(all_chunks)
+    build_retriever(config, all_chunks)
     repo.update_run(
         run_id,
         "success",
@@ -209,7 +220,7 @@ def _run_analyze(run_id: int, request: DailyTaskRequest) -> None:
     stale_keys = {key for key in stale_keys if key in issue_keys}
     report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config, run_id=run_id)
     chunks = filter_product_doc_chunks(repo.load_doc_chunks())
-    daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, BM25Index(chunks), issues)
+    daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, build_retriever(config, chunks), issues)
     repo.save_daily_analysis(daily_analysis)
     repo.save_issue_analyses(issue_analyses)
     repo.update_run(run_id, "success", f"Analyzed {len(issue_analyses)} priority issues for {report_date}")
@@ -368,6 +379,68 @@ def create_build_docs_task(payload: SimpleTaskRequest) -> dict[str, int | str]:
     _, repo = _bootstrap(payload.config_path)
     run_id = repo.create_run("build-docs", date.today().isoformat(), "queued", payload=payload.model_dump())
     return {"id": run_id, "status": "queued"}
+
+
+@app.post("/docs/upload")
+async def upload_raw_docs(
+    files: list[UploadFile] = File(...),
+    config_path: str | None = None,
+) -> dict[str, object]:
+    config = _load_config_only(config_path)
+    if not files:
+        raise HTTPException(status_code=400, detail="未提供上传文件")
+
+    raw_dir = Path(config.docs.raw_dir)
+    supported_extensions = {item.lower() for item in config.docs.supported_extensions}
+    seen_names: set[str] = set()
+    pending_writes: list[tuple[Path, bytes]] = []
+    errors: list[str] = []
+
+    for upload in files:
+        filename = Path(upload.filename or "").name
+        if not filename:
+            errors.append("存在缺少文件名的上传项")
+            continue
+        if filename in seen_names:
+            errors.append(f"上传请求中存在重复文件名: {filename}")
+            continue
+        seen_names.add(filename)
+
+        suffix = Path(filename).suffix.lower()
+        if suffix not in supported_extensions:
+            errors.append(f"文件格式不支持: {filename}，仅支持 {', '.join(sorted(supported_extensions))}")
+            continue
+
+        target = raw_dir / filename
+        if target.exists():
+            errors.append(f"文件已存在，请先重命名后再上传: {filename}")
+            continue
+
+        content = await upload.read()
+        if not content:
+            errors.append(f"文件内容为空: {filename}")
+            continue
+        if len(content) > MAX_UPLOAD_BYTES:
+            errors.append(f"文件过大，超过 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB 限制: {filename}")
+            continue
+
+        pending_writes.append((target, content))
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"message": "文档上传校验失败", "errors": errors})
+
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    saved_files = []
+    for target, content in pending_writes:
+        target.write_bytes(content)
+        saved_files.append(str(target.resolve()))
+
+    return UploadDocsResponse(
+        saved_files=saved_files,
+        destination_dir=str(raw_dir.resolve()),
+        supported_extensions=sorted(supported_extensions),
+        message="文件已保存，请手动执行“构建文档索引”以纳入知识库。",
+    ).model_dump()
 
 
 @app.post("/tasks/analyze")
@@ -538,9 +611,10 @@ def post_docs_qa(payload: DocsQuestionPayload) -> dict:
     config, repo = _bootstrap(payload.config_path)
     result = answer_question(
         config,
-        BM25Index(filter_product_doc_chunks(repo.load_doc_chunks())),
+        build_retriever(config, filter_product_doc_chunks(repo.load_doc_chunks())),
         payload.question,
         top_k=payload.top_k,
+        repo=repo,
     )
     return result.to_dict()
 
@@ -554,13 +628,14 @@ def post_jira_docs_qa(payload: JiraDocsQuestionPayload) -> dict:
     daily_analysis = repo.load_daily_analysis(snapshot_date)
     result = answer_jira_docs_question(
         config,
-        BM25Index(filter_product_doc_chunks(repo.load_doc_chunks())),
-        BM25Index(filter_jira_doc_chunks(repo.load_doc_chunks())),
+        build_retriever(config, repo.load_doc_chunks()),
+        None,
         payload.question,
         issues,
         issue_analyses,
         daily_analysis,
         top_k=payload.top_k,
+        repo=repo,
     )
     return {"snapshot_date": snapshot_date, **result.to_dict()}
 
@@ -648,3 +723,14 @@ def _serialize_run(row: dict) -> dict:
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
     }
+
+
+def main() -> None:
+    import uvicorn
+
+    config = _load_config_only()
+    uvicorn.run("app.api:app", host=config.server.host, port=config.server.port, reload=False)
+
+
+if __name__ == "__main__":
+    main()

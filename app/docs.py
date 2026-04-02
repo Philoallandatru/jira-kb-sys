@@ -12,6 +12,14 @@ from typing import Iterable
 
 from app.config import DocsConfig
 from app.models import DocChunk, MarkdownDocument, utc_now_iso
+from app.retrieval.preprocess import (
+    build_context_prefix,
+    build_retrieval_text,
+    classify_local_source_type,
+    enrich_chunk,
+    extract_exact_terms,
+    infer_document_metadata,
+)
 
 
 class DocsError(RuntimeError):
@@ -22,6 +30,12 @@ class DocsError(RuntimeError):
 class SearchHit:
     chunk: DocChunk
     score: float
+
+
+@dataclass
+class Section:
+    heading_path: list[str]
+    blocks: list[str]
 
 
 class DocumentConverter:
@@ -112,14 +126,24 @@ class DocumentConverter:
         markdown_path = self.markdown_dir / relative.with_suffix(".md")
         markdown_path.parent.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text(markdown, encoding="utf-8")
+        source_type = classify_local_source_type(relative.as_posix(), _normalize_source_type(source_path.suffix.lower()))
+        metadata = {
+            "source_id": f"local:{relative.as_posix()}",
+            "page_title": source_path.stem,
+            "labels": [part.lower() for part in relative.parts[:-1] if part],
+            "ancestor_titles": [part for part in relative.parts[:-1] if part],
+            "authors": [],
+            "comment_snippets": [],
+        }
         return MarkdownDocument(
             document_id=_slugify(relative.as_posix()),
             source_path=str(source_path.resolve()),
-            source_type=_normalize_source_type(source_path.suffix.lower()),
+            source_type=source_type,
             title=source_path.stem,
             markdown_path=str(markdown_path.resolve()),
             content=markdown,
             updated_at=utc_now_iso(),
+            metadata=metadata,
         )
 
     def _persist_chunks(self, document: MarkdownDocument, chunks: list[DocChunk]) -> None:
@@ -129,62 +153,71 @@ class DocumentConverter:
 
 
 def chunk_markdown(document: MarkdownDocument, max_chunk_chars: int, overlap_chars: int) -> Iterable[DocChunk]:
-    lines = document.content.splitlines()
-    section_path: list[str] = []
-    page_or_sheet: str | None = None
-    buffer: list[str] = []
+    document_metadata = infer_document_metadata(document)
+    labels = [str(item) for item in document_metadata.get("labels", []) if str(item).strip()]
+    ancestor_titles = [str(item) for item in document_metadata.get("ancestor_titles", []) if str(item).strip()]
+    authors = [str(item) for item in document_metadata.get("authors", []) if str(item).strip()]
+    comment_snippets = [str(item) for item in document_metadata.get("comment_snippets", []) if str(item).strip()]
+    page_or_sheet = _extract_page_or_sheet(document.content)
     chunk_index = 0
 
-    def flush() -> list[DocChunk]:
-        nonlocal buffer, chunk_index
-        text = "\n".join(buffer).strip()
-        buffer = []
-        if not text:
-            return []
-        pieces = [text]
-        if len(text) > max_chunk_chars:
-            pieces = []
-            start = 0
-            while start < len(text):
-                end = min(len(text), start + max_chunk_chars)
-                pieces.append(text[start:end])
-                if end == len(text):
-                    break
-                start = max(0, end - overlap_chars)
-        chunks: list[DocChunk] = []
-        for piece in pieces:
+    for section in _split_into_sections(document.content):
+        for piece in _split_section_blocks(section.blocks, max_chunk_chars=max_chunk_chars, overlap_chars=overlap_chars):
             if _is_low_signal_chunk(piece):
                 continue
             digest = hashlib.sha1(f"{document.document_id}:{chunk_index}:{piece}".encode("utf-8")).hexdigest()[:12]
-            chunks.append(
-                DocChunk(
-                    chunk_id=f"{document.document_id}-{digest}",
-                    source_path=document.source_path,
-                    source_type=document.source_type,
-                    doc_title=document.title,
-                    section_path=list(section_path),
-                    page_or_sheet=page_or_sheet,
-                    content=piece,
-                    tags=[document.source_type, *[item.lower() for item in section_path]],
-                    updated_at=document.updated_at,
+            heading_path = list(section.heading_path)
+            context_prefix = build_context_prefix(
+                page_title=str(document_metadata.get("page_title") or document.title),
+                space_key=str(document_metadata.get("space_key")) if document_metadata.get("space_key") else None,
+                ancestor_titles=ancestor_titles,
+                heading_path=heading_path,
+                labels=labels,
+                updated_at=document.updated_at,
+                comment_snippets=comment_snippets,
+            )
+            retrieval_text = build_retrieval_text(context_prefix, piece)
+            metadata_json = dict(document_metadata)
+            metadata_json["heading_path"] = heading_path
+            metadata_json["page_or_sheet"] = page_or_sheet
+            exact_terms = extract_exact_terms(retrieval_text, metadata_json)
+            tags = list(
+                dict.fromkeys(
+                    [
+                        document.source_type,
+                        *[item.lower() for item in heading_path],
+                        *labels,
+                        *exact_terms,
+                    ]
                 )
             )
+            chunk = DocChunk(
+                chunk_id=f"{document.document_id}-{digest}",
+                source_path=document.source_path,
+                source_type=document.source_type,
+                doc_title=document.title,
+                page_or_sheet=page_or_sheet,
+                updated_at=document.updated_at,
+                source_id=str(document_metadata.get("source_id") or document.source_path),
+                page_title=str(document_metadata.get("page_title") or document.title),
+                section_path=heading_path,
+                heading_path=heading_path,
+                space_key=str(document_metadata.get("space_key")) if document_metadata.get("space_key") else None,
+                page_id=str(document_metadata.get("page_id")) if document_metadata.get("page_id") else None,
+                ancestor_titles=ancestor_titles,
+                labels=labels,
+                authors=authors,
+                comment_snippets=comment_snippets,
+                content=piece,
+                raw_text=piece,
+                context_prefix=context_prefix,
+                retrieval_text=retrieval_text,
+                exact_terms=exact_terms,
+                tags=tags,
+                metadata_json=metadata_json,
+            )
+            yield enrich_chunk(chunk)
             chunk_index += 1
-        return chunks
-
-    for line in lines:
-        if re.match(r"^#{1,6}\s+", line):
-            for chunk in flush():
-                yield chunk
-            level = len(line) - len(line.lstrip("#"))
-            title = line[level:].strip()
-            section_path[:] = section_path[: level - 1]
-            section_path.append(title)
-        if line.lower().startswith(("page ", "sheet:")):
-            page_or_sheet = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
-        buffer.append(line)
-    for chunk in flush():
-        yield chunk
 
 
 class BM25Index:
@@ -418,3 +451,138 @@ def _is_low_signal_chunk(text: str) -> bool:
     if short_numeric_lines >= max(2, len(lines) // 3):
         return True
     return False
+
+
+def _split_into_sections(markdown_text: str) -> list[Section]:
+    sections: list[Section] = []
+    heading_stack: list[tuple[int, str]] = []
+    current_path: list[str] = []
+    current_blocks: list[str] = []
+    paragraph_lines: list[str] = []
+    code_lines: list[str] = []
+    in_code_block = False
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph_lines
+        paragraph = "\n".join(line.rstrip() for line in paragraph_lines).strip()
+        paragraph_lines = []
+        if paragraph:
+            current_blocks.append(paragraph)
+
+    def flush_code_block() -> None:
+        nonlocal code_lines
+        if code_lines:
+            current_blocks.append("\n".join(code_lines).strip())
+            code_lines = []
+
+    def flush_section() -> None:
+        flush_paragraph()
+        flush_code_block()
+        if current_blocks:
+            sections.append(Section(heading_path=list(current_path), blocks=list(current_blocks)))
+            current_blocks.clear()
+
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.rstrip()
+        heading_match = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading_match:
+            flush_section()
+            level = len(heading_match.group(1))
+            title = heading_match.group(2).strip()
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
+            heading_stack.append((level, title))
+            current_path = [item[1] for item in heading_stack]
+            continue
+        if not line.strip():
+            flush_paragraph()
+            continue
+        if line.startswith("```"):
+            flush_paragraph()
+            if in_code_block:
+                code_lines.append(line)
+                flush_code_block()
+                in_code_block = False
+            else:
+                flush_code_block()
+                code_lines = [line]
+                in_code_block = True
+            continue
+        if in_code_block:
+            code_lines.append(line)
+            continue
+        if line.startswith("> ") or line.startswith("- ") or line.startswith("1. ") or "|" in line:
+            flush_paragraph()
+            current_blocks.append(line)
+            continue
+        paragraph_lines.append(line)
+
+    flush_section()
+    if not sections:
+        fallback = clean_text(markdown_text)
+        if fallback:
+            sections.append(Section(heading_path=[], blocks=[fallback]))
+    return sections
+
+
+def _split_section_blocks(blocks: list[str], *, max_chunk_chars: int, overlap_chars: int) -> list[str]:
+    chunks: list[str] = []
+    current_blocks: list[str] = []
+    current_len = 0
+
+    def flush_current() -> None:
+        nonlocal current_blocks, current_len
+        text = "\n\n".join(current_blocks).strip()
+        current_blocks = []
+        current_len = 0
+        if text:
+            chunks.append(text)
+
+    for block in blocks:
+        normalized = block.strip()
+        if not normalized:
+            continue
+        block_len = len(normalized) + 2
+        if current_blocks and current_len + block_len > max_chunk_chars:
+            flush_current()
+        if len(normalized) > max_chunk_chars:
+            for piece in _split_oversized_block(normalized, max_chunk_chars=max_chunk_chars, overlap_chars=overlap_chars):
+                chunks.append(piece)
+            continue
+        current_blocks.append(normalized)
+        current_len += block_len
+
+    flush_current()
+    return chunks
+
+
+def _split_oversized_block(text: str, *, max_chunk_chars: int, overlap_chars: int) -> list[str]:
+    pieces: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + max_chunk_chars)
+        if end < len(text):
+            split_at = text.rfind("\n", start, end)
+            if split_at <= start:
+                split_at = text.rfind(" ", start, end)
+            if split_at > start:
+                end = split_at
+        piece = text[start:end].strip()
+        if piece:
+            pieces.append(piece)
+        if end >= len(text):
+            break
+        start = max(start + 1, end - max(overlap_chars, 0))
+    return pieces
+
+
+def _extract_page_or_sheet(text: str) -> str | None:
+    for line in text.splitlines():
+        lowered = line.lower()
+        if lowered.startswith(("page ", "sheet:")):
+            return line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+    return None
+
+
+def clean_text(text: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t]+", " ", text)).strip()
