@@ -12,6 +12,10 @@ data/markdown/*
 !data/markdown/.gitkeep
 data/chunks/*
 !data/chunks/.gitkeep
+data/retrieval/*
+!data/retrieval/.gitkeep
+data/test.db
+uv.lock
 
 output/daily/*
 !output/daily/.gitkeep
