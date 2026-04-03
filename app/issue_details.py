@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from collections import Counter
@@ -114,31 +114,31 @@ def _fallback_issue_deep_analysis(
 
     suspected: list[str] = []
     if cached_analysis:
-        suspected.append(f"Existing issue analysis suggests the root cause may be: {cached_analysis.suspected_root_cause}")
+        suspected.append(f"已有 issue 分析认为根因可能是：{cached_analysis.suspected_root_cause}")
     if "block" in issue.status.lower():
-        suspected.append("The issue is still blocked, so the blocking dependency should be cleared before further execution.")
+        suspected.append("当前 Issue 仍处于阻塞状态，需要先解除阻塞依赖再继续推进。")
     if issue.severity and issue.severity.lower() in {"major", "highest", "high"} and not issue.root_cause:
-        suspected.append("The issue is high severity, but Jira still lacks a clearly documented root cause.")
+        suspected.append("该 Issue 严重级别较高，但 Jira 里仍缺少明确根因记录。")
     if not spec_relations:
-        spec_relations.append("No strongly relevant spec evidence was found in the local knowledge base.")
+        spec_relations.append("本地知识库中未找到强相关的 spec 证据。")
     if not policy_relations:
-        policy_relations.append("No strongly relevant policy or design-guidance evidence was found in the local knowledge base.")
+        policy_relations.append("本地知识库中未找到强相关的 policy 或设计规范证据。")
 
     next_actions = list(cached_analysis.action_needed if cached_analysis else [])
     if issue.assignee is None:
-        next_actions.append("Assign a single owner before continuing the investigation or fix.")
+        next_actions.append("继续排查或修复前，先明确唯一 owner。")
     if not next_actions:
-        next_actions.append("Collect logs, reproduce the issue, and validate actual behavior against the matched spec and policy evidence.")
+        next_actions.append("补齐日志、复现问题，并将实际行为与已命中的 spec/policy 证据逐条核对。")
 
     open_questions: list[str] = []
     if issue.priority and issue.priority.lower() in {"highest", "high", "critical", "p0", "p1"}:
-        open_questions.append("Are the release gate and regression sign-off criteria already defined for this high-priority issue?")
+        open_questions.append("这个高优先级 Issue 的发布闸门和回归签收标准是否已经明确？")
     if not issue.description:
-        open_questions.append("Should the Jira issue be updated with reproduction steps, impact scope, and expected behavior?")
+        open_questions.append("是否需要在 Jira 中补充复现步骤、影响范围和期望行为？")
     if not issue.fix_versions:
-        open_questions.append("Should a target fix version be assigned before execution continues?")
+        open_questions.append("继续推进前是否需要先指定目标修复版本？")
     if fact_sheet["platform"] or fact_sheet["script_name"]:
-        open_questions.append("Has the reported platform and script combination been reproduced independently?")
+        open_questions.append("报告中的平台与脚本组合是否已经被独立复现验证？")
 
     return IssueDeepAnalysisResult(
         issue_key=issue.issue_key,
@@ -151,9 +151,9 @@ def _fallback_issue_deep_analysis(
         comment_key_points=comment_insights["key_points"],
         comment_risks_blockers=comment_insights["risks_blockers"],
         comment_actions_decisions=comment_insights["actions_decisions"],
-        suspected_problems=suspected or ["Current evidence is still insufficient to support a stable conclusion."],
+        suspected_problems=suspected or ["当前证据仍不足以支持稳定结论。"],
         next_actions=next_actions,
-        open_questions=open_questions or ["Do we now have enough root-cause evidence to support a concrete decision?"],
+        open_questions=open_questions or ["当前是否已经具备足够根因证据来支持明确决策？"],
         confidence="medium" if hits else "low",
         citations=citations[:6],
         raw_response="offline-fallback",
@@ -341,7 +341,7 @@ def _summarize_comments(comments: list[str], max_comments: int = 8, max_chars_pe
 
     if not trimmed:
         return {
-            "summary": "No usable comment information is available.",
+            "summary": "当前没有可用的评论信息。",
             "key_points": [],
             "risks_blockers": [],
             "actions_decisions": [],
@@ -366,7 +366,7 @@ def _summarize_comments(comments: list[str], max_comments: int = 8, max_chars_pe
         actions_decisions = trimmed[:2]
 
     return {
-        "summary": f"Collected {len(trimmed)} comments and summarized the key discussion, blockers, and actions.",
+        "summary": f"共整理 {len(trimmed)} 条评论，已归纳关键讨论、风险阻塞和行动项。",
         "key_points": key_points,
         "risks_blockers": risks_blockers[:3],
         "actions_decisions": actions_decisions[:3],

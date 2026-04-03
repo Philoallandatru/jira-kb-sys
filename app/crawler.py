@@ -6,7 +6,7 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 from app.config import JiraConfig
-from app.models import IssueChangeEvent, IssueDelta, IssueRecord, infer_team_from_issue_key
+from app.models import IssueChangeEvent, IssueDelta, IssueRecord
 
 
 class CrawlerError(RuntimeError):
@@ -132,6 +132,7 @@ class JiraCrawler:
         comments = self._extract_comments(fields)
         issue_links, blocks_links, mentioned_in_links = self._extract_issue_links(fields)
         mapped_values = self._extract_mapped_fields(fields)
+        report_department = self._as_text(mapped_values.get("report_department"))
         fix_versions = self._extract_name_list(self._field_value(fields, "fixVersions"))
         affects_versions = self._extract_name_list(self._field_value(fields, "versions"))
         activity_comments = self._ensure_text_list(mapped_values.get("activity_comment")) or comments
@@ -140,7 +141,7 @@ class JiraCrawler:
             issue_key=issue_key,
             summary=self._as_text(self._field_value(fields, "summary")),
             status=self._as_named_value(self._field_value(fields, "status")) or "Unknown",
-            team=infer_team_from_issue_key(issue_key),
+            team=report_department,
             assignee=self._as_display_name(self._field_value(fields, "assignee")),
             priority=self._as_named_value(self._field_value(fields, "priority")),
             updated_at=self._field_value(fields, "updated"),
@@ -155,7 +156,7 @@ class JiraCrawler:
             fix_versions=fix_versions,
             affects_versions=affects_versions,
             severity=self._as_text(mapped_values.get("severity")),
-            report_department=self._as_text(mapped_values.get("report_department")),
+            report_department=report_department,
             root_cause=self._as_text(mapped_values.get("root_cause")),
             frequency=self._as_text(mapped_values.get("frequency")),
             fail_runtime=self._as_text(mapped_values.get("fail_runtime")),
@@ -189,6 +190,8 @@ class JiraCrawler:
         histories = getattr(changelog, "histories", None)
         if not histories:
             return []
+        mapped_values = self._extract_mapped_fields(getattr(issue, "fields", {}))
+        report_department = self._as_text(mapped_values.get("report_department"))
         events: list[IssueChangeEvent] = []
         for history in histories:
             history_id = str(getattr(history, "id", ""))
@@ -209,7 +212,7 @@ class JiraCrawler:
                         to_value=to_value,
                         change_type=self._change_type(field, from_value, to_value),
                         issue_status_after=to_value if field.lower() == "status" else None,
-                        team_after=infer_team_from_issue_key(issue.key),
+                        team_after=report_department,
                     )
                 )
         return events
@@ -217,9 +220,12 @@ class JiraCrawler:
     def _extract_mapped_fields(self, fields) -> dict[str, Any]:
         values: dict[str, Any] = {}
         for logical_name, field_id in self.config.field_mapping.model_dump().items():
-            if not field_id:
+            if field_id:
+                values[logical_name] = self._field_value(fields, field_id)
                 continue
-            values[logical_name] = self._field_value(fields, field_id)
+            # Fall back to the logical field name so local mock data and direct exports
+            # can still populate the business field without custom Jira mappings.
+            values[logical_name] = self._field_value(fields, logical_name)
         return values
 
     def _field_value(self, fields, name: str) -> Any:

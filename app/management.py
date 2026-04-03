@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from collections import Counter, defaultdict
@@ -116,7 +116,7 @@ def write_management_summary_files(config: AppConfig, result: ManagementSummaryR
 
 def render_management_markdown(result: ManagementSummaryResult) -> str:
     lines = [
-        "# Jira 管理层摘要",
+        "# Jira 项目管理摘要",
         "",
         f"- 时间范围: {result.request.date_from} ~ {result.request.date_to}",
         f"- 团队筛选: {result.request.team or 'All'}",
@@ -141,7 +141,7 @@ def render_management_markdown(result: ManagementSummaryResult) -> str:
     lines.extend([f"- {item}" for item in result.current_risks_and_blockers])
     lines.extend(["", "## 根因与模式观察"])
     lines.extend([f"- {item}" for item in result.root_cause_and_pattern_observations])
-    lines.extend(["", "## 给管理层的建议动作"])
+    lines.extend(["", "## 给项目管理的建议动作"])
     lines.extend([f"- {item}" for item in result.recommended_management_actions])
     lines.extend(["", "## 数据不足"])
     lines.extend([f"- {item}" for item in result.data_gaps] or ["- 暂无"])
@@ -326,7 +326,7 @@ def _fallback_management_summary(
         )
     if metrics.issues_without_root_cause:
         recommended_management_actions.append(
-            "要求高风险 Jira 补齐根因字段或等价说明，避免管理层只能看到现象。"
+            "要求高风险 Jira 补齐根因字段或等价说明，避免项目管理只能看到现象。"
         )
     data_gaps = []
     if metrics.issues_without_owner:

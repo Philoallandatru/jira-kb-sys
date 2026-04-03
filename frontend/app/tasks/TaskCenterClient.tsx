@@ -1,10 +1,12 @@
-"use client";
+﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
+  checkConfluenceConnection,
   checkJiraConnection,
   createAnalyzeTask,
   createBuildDocsTask,
+  createConfluenceSyncTask,
   createCrawlTask,
   createDailyReportTask,
   createFullSyncTask,
@@ -13,9 +15,13 @@ import {
   getTask,
   listTasks,
   type TaskRun,
+  uploadDocs,
 } from "@/lib/api";
-
-const statusOptions = ["Open", "In Progress", "Blocked", "Done", "Closed", "Resolved"];
+import { DailyTasksSection } from "./components/DailyTasksSection";
+import { KnowledgeTasksSection } from "./components/KnowledgeTasksSection";
+import { ManagementSummarySection } from "./components/ManagementSummarySection";
+import { SyncTasksSection } from "./components/SyncTasksSection";
+import { TaskRunsPanel } from "./components/TaskRunsPanel";
 
 export function TaskCenterClient() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -25,14 +31,17 @@ export function TaskCenterClient() {
   const [syncDateTo, setSyncDateTo] = useState(today);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
-  const [team, setTeam] = useState("All");
+  const [team, setTeam] = useState("");
   const [statuses, setStatuses] = useState<string[]>([]);
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
-  const [actionState, setActionState] = useState("Ready");
-  const [jiraState, setJiraState] = useState("Not checked");
+  const [actionState, setActionState] = useState("就绪");
+  const [jiraState, setJiraState] = useState("未检查");
+  const [confluenceState, setConfluenceState] = useState("未检查");
+  const [uploadState, setUploadState] = useState("未上传文档");
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function refreshRuns(preferredRunId?: number) {
@@ -43,7 +52,7 @@ export function TaskCenterClient() {
       const nextSelectedId = preferredRunId ?? selectedRunId ?? result.items[0]?.id ?? null;
       setSelectedRunId(nextSelectedId);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Failed to load task list");
+      setError(requestError instanceof Error ? requestError.message : "加载任务列表失败");
     } finally {
       setLoadingRuns(false);
     }
@@ -67,7 +76,7 @@ export function TaskCenterClient() {
       })
       .catch((requestError) => {
         if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : "Failed to load task details");
+          setError(requestError instanceof Error ? requestError.message : "加载任务详情失败");
         }
       });
     return () => {
@@ -94,252 +103,148 @@ export function TaskCenterClient() {
 
   async function launchTask(taskName: string, runFactory: () => Promise<{ id: number; status: string }>) {
     setError(null);
-    setActionState(`Submitting ${taskName}...`);
+    setActionState(`正在提交 ${taskName}...`);
     try {
       const result = await runFactory();
-      setActionState(`${taskName} queued as #${result.id}`);
+      setActionState(`${taskName} 已排队，任务 #${result.id}`);
       await refreshRuns(result.id);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : `Failed to submit ${taskName}`);
-      setActionState(`${taskName} failed`);
+      setError(requestError instanceof Error ? requestError.message : `提交 ${taskName} 失败`);
+      setActionState(`${taskName} 提交失败`);
     }
   }
 
   async function probeJiraConnection() {
     setError(null);
-    setJiraState("Checking Jira connectivity...");
+    setJiraState("正在检查 Jira 连接...");
     try {
       const result = await checkJiraConnection();
       setJiraState(
-        `Connected to ${result.base_url}${result.server_title ? ` | ${result.server_title}` : ""}${
+        `已连接 ${result.base_url}${result.server_title ? ` | ${result.server_title}` : ""}${
           result.authenticated_user ? ` | ${result.authenticated_user}` : ""
-        }`,
+        }`
       );
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : "Failed to connect to Jira";
+      const message = requestError instanceof Error ? requestError.message : "Jira 连接失败";
       setError(message);
-      setJiraState("Jira connection failed");
+      setJiraState("Jira 连接失败");
+    }
+  }
+
+  async function probeConfluenceConnection() {
+    setError(null);
+    setConfluenceState("正在检查 Confluence 连接...");
+    try {
+      const result = await checkConfluenceConnection();
+      setConfluenceState(
+        `已连接 ${result.base_url}${result.authenticated_user ? ` | ${result.authenticated_user}` : ""}${
+          result.space_keys.length ? ` | Space: ${result.space_keys.join(", ")}` : ""
+        }`
+      );
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "Confluence 连接失败";
+      setError(message);
+      setConfluenceState("Confluence 连接失败");
+    }
+  }
+
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) {
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    setUploadState("正在上传文档...");
+    try {
+      const result = await uploadDocs(files);
+      setUploadState(`${result.message} 已保存 ${result.saved_files.length} 个文件。`);
+    } catch (requestError) {
+      const message = requestError instanceof Error ? requestError.message : "上传文档失败";
+      setError(message);
+      setUploadState("上传文档失败");
+    } finally {
+      setUploading(false);
+      event.target.value = "";
     }
   }
 
   return (
     <div className="qa-layout">
       <aside className="panel">
-        <h2>Launch Tasks</h2>
+        <h2>任务中心</h2>
         <div className="status-line">{actionState}</div>
 
-        <div className="summary-section">
-          <h3>Sync Tasks</h3>
-          <div className="status-line">{jiraState}</div>
-          <div className="field">
-            <label htmlFor="task-sync-date">Snapshot Date</label>
-            <input
-              id="task-sync-date"
-              type="date"
-              value={syncDate}
-              onChange={(event) => setSyncDate(event.target.value)}
-            />
-          </div>
-          <div className="settings-stack">
-            <button className="secondary-button" type="button" onClick={probeJiraConnection}>
-              Check Jira Connection
-            </button>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => launchTask("incremental-sync", () => createIncrementalSyncTask({ snapshot_date: syncDate }))}
-            >
-              Run Incremental Sync
-            </button>
-            <div className="field">
-              <label htmlFor="task-sync-date-from">Full Sync From</label>
-              <input
-                id="task-sync-date-from"
-                type="date"
-                value={syncDateFrom}
-                onChange={(event) => setSyncDateFrom(event.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="task-sync-date-to">Full Sync To</label>
-              <input
-                id="task-sync-date-to"
-                type="date"
-                value={syncDateTo}
-                onChange={(event) => setSyncDateTo(event.target.value)}
-              />
-            </div>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() =>
-                launchTask("full-sync", () =>
-                  createFullSyncTask({
-                    date_from: syncDateFrom,
-                    date_to: syncDateTo,
-                  })
-                )
-              }
-            >
-              Run Full Sync
-            </button>
-            <button className="secondary-button" type="button" onClick={() => launchTask("crawl", () => createCrawlTask())}>
-              Run Legacy Crawl
-            </button>
-          </div>
-        </div>
+        <SyncTasksSection
+          jiraState={jiraState}
+          confluenceState={confluenceState}
+          syncDate={syncDate}
+          syncDateFrom={syncDateFrom}
+          syncDateTo={syncDateTo}
+          onSyncDateChange={setSyncDate}
+          onSyncDateFromChange={setSyncDateFrom}
+          onSyncDateToChange={setSyncDateTo}
+          onProbeJira={probeJiraConnection}
+          onProbeConfluence={probeConfluenceConnection}
+          onIncrementalSync={() => launchTask("增量同步", () => createIncrementalSyncTask({ snapshot_date: syncDate }))}
+          onConfluenceSync={() => launchTask("Confluence 同步", () => createConfluenceSyncTask())}
+          onFullSync={() =>
+            launchTask("全量同步", () =>
+              createFullSyncTask({
+                date_from: syncDateFrom,
+                date_to: syncDateTo,
+              })
+            )
+          }
+          onLegacyCrawl={() => launchTask("旧版抓取", () => createCrawlTask())}
+        />
 
-        <div className="summary-section">
-          <h3>Knowledge Tasks</h3>
-          <div className="settings-stack">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => launchTask("build-docs", () => createBuildDocsTask())}
-            >
-              Build Docs and Jira Chunks
-            </button>
-          </div>
-        </div>
+        <KnowledgeTasksSection
+          uploadState={uploadState}
+          uploading={uploading}
+          onUpload={handleUpload}
+          onBuildDocs={() => launchTask("构建文档索引", () => createBuildDocsTask())}
+        />
 
-        <div className="summary-section">
-          <h3>Daily Tasks</h3>
-          <div className="field">
-            <label htmlFor="task-report-date">Report Date</label>
-            <input
-              id="task-report-date"
-              type="date"
-              value={reportDate}
-              onChange={(event) => setReportDate(event.target.value)}
-            />
-          </div>
-          <div className="settings-stack">
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => launchTask("analyze", () => createAnalyzeTask({ report_date: reportDate }))}
-            >
-              Generate Daily Analysis
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => launchTask("report", () => createDailyReportTask({ report_date: reportDate }))}
-            >
-              Export Daily Report
-            </button>
-          </div>
-        </div>
+        <DailyTasksSection
+          reportDate={reportDate}
+          onReportDateChange={setReportDate}
+          onAnalyze={() => launchTask("生成日报分析", () => createAnalyzeTask({ report_date: reportDate }))}
+          onExportReport={() => launchTask("导出日报", () => createDailyReportTask({ report_date: reportDate }))}
+        />
 
-        <div className="summary-section">
-          <h3>Management Summary</h3>
-          <div className="field">
-            <label htmlFor="task-date-from">Date From</label>
-            <input id="task-date-from" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="task-date-to">Date To</label>
-            <input id="task-date-to" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="task-team">Team</label>
-            <select id="task-team" value={team} onChange={(event) => setTeam(event.target.value)}>
-              <option value="All">All</option>
-              <option value="SV">SV</option>
-              <option value="DV">DV</option>
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="task-statuses">Jira Status</label>
-            <select
-              id="task-statuses"
-              multiple
-              value={statuses}
-              onChange={(event) => setStatuses(Array.from(event.target.selectedOptions, (option) => option.value))}
-              style={{ minHeight: 140 }}
-            >
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </div>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() =>
-              launchTask("management-summary", () =>
-                createManagementSummaryTask({
-                  date_from: dateFrom,
-                  date_to: dateTo,
-                  team: team === "All" ? null : team,
-                  jira_status: statuses,
-                })
-              )
-            }
-          >
-            Generate Management Summary
-          </button>
-        </div>
+        <ManagementSummarySection
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          team={team}
+          statuses={statuses}
+          onDateFromChange={setDateFrom}
+          onDateToChange={setDateTo}
+          onTeamChange={setTeam}
+          onStatusesChange={setStatuses}
+          onGenerate={() =>
+            launchTask("项目管理摘要", () =>
+              createManagementSummaryTask({
+                date_from: dateFrom,
+                date_to: dateTo,
+                team: team.trim() || null,
+                jira_status: statuses,
+              })
+            )
+          }
+        />
       </aside>
 
       <section className="panel">
-        <h2>Recent Tasks</h2>
-        {error && <div className="empty-state">{error}</div>}
-        <div className="summary-section">
-          <button className="secondary-button" type="button" onClick={() => refreshRuns()}>
-            Refresh Task List
-          </button>
-        </div>
-        {loadingRuns && <div className="empty-state">Loading task history...</div>}
-        {!loadingRuns && (
-          <div className="issues-layout" style={{ gridTemplateColumns: "320px minmax(0, 1fr)" }}>
-            <div className="stack-list">
-              {runs.map((run) => (
-                <button
-                  key={run.id}
-                  className={`list-button ${selectedRunId === run.id ? "active" : ""}`}
-                  type="button"
-                  onClick={() => setSelectedRunId(run.id)}
-                >
-                  <strong>
-                    #{run.id} | {run.run_type}
-                  </strong>
-                  <span>{run.status}</span>
-                  <span>{run.run_date}</span>
-                </button>
-              ))}
-            </div>
-            <div>
-              {!selectedRun && <div className="empty-state">Select a run to inspect its details.</div>}
-              {selectedRun && (
-                <>
-                  <div className="status-line">
-                    #{selectedRun.id} | {selectedRun.run_type} | {selectedRun.status}
-                  </div>
-                  <div className="summary-section">
-                    <h3>Meta</h3>
-                    <p>Run Date: {selectedRun.run_date}</p>
-                    <p>Attempts: {selectedRun.attempt_count}</p>
-                    <p>Created At: {selectedRun.created_at}</p>
-                    <p>Started At: {selectedRun.started_at || "-"}</p>
-                    <p>Finished At: {selectedRun.finished_at || "-"}</p>
-                    <p>Last Error: {selectedRun.last_error || "-"}</p>
-                  </div>
-                  <div className="summary-section">
-                    <h3>Details</h3>
-                    {selectedRun.details_json ? (
-                      <pre>{JSON.stringify(selectedRun.details_json, null, 2)}</pre>
-                    ) : (
-                      <p>{selectedRun.details || "-"}</p>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
+        <TaskRunsPanel
+          runs={runs}
+          selectedRunId={selectedRunId}
+          selectedRun={selectedRun}
+          loadingRuns={loadingRuns}
+          error={error}
+          onRefresh={() => refreshRuns()}
+          onSelectRun={setSelectedRunId}
+        />
       </section>
     </div>
   );
