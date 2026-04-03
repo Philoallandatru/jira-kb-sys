@@ -1,4 +1,4 @@
-export const API_BASE_URL =
+﻿export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
 
 export type ManagementSummaryRequest = {
@@ -164,6 +164,10 @@ export type IssueDeepAnalysisResponse = {
     spec_relations: string[];
     policy_relations: string[];
     related_jira_designs: string[];
+    comment_summary: string;
+    comment_key_points: string[];
+    comment_risks_blockers: string[];
+    comment_actions_decisions: string[];
     suspected_problems: string[];
     next_actions: string[];
     open_questions: string[];
@@ -243,6 +247,22 @@ export type JiraConnectionStatus = {
   has_jql: boolean;
 };
 
+export type ConfluenceConnectionStatus = {
+  ok: boolean;
+  base_url: string;
+  authenticated_user?: string | null;
+  crawl_mode: string;
+  space_keys: string[];
+  sample_spaces: string[];
+};
+
+export type UploadDocsResult = {
+  saved_files: string[];
+  destination_dir: string;
+  supported_extensions: string[];
+  message: string;
+};
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
   const response = await fetch(url, {
@@ -256,6 +276,20 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Request failed: ${response.status} ${response.statusText} for ${url}${body ? ` | ${body}` : ""}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function apiFormFetch<T>(path: string, body: FormData): Promise<T> {
+  const url = `${API_BASE_URL}${path}`;
+  const response = await fetch(url, {
+    method: "POST",
+    body,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Request failed: ${response.status} ${response.statusText} for ${url}${text ? ` | ${text}` : ""}`);
   }
   return (await response.json()) as T;
 }
@@ -278,6 +312,13 @@ export async function createFullSyncTask(payload: SyncTaskRequest = {}) {
   return apiFetch<{ id: number; status: string }>("/tasks/sync/full", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function createConfluenceSyncTask() {
+  return apiFetch<{ id: number; status: string }>("/tasks/sync/confluence", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
@@ -309,6 +350,14 @@ export async function createDailyReportTask(payload: { report_date?: string }) {
   });
 }
 
+export async function uploadDocs(files: File[]) {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  return apiFormFetch<UploadDocsResult>("/docs/upload", formData);
+}
+
 export async function listTasks(limit = 50) {
   return apiFetch<{ items: TaskRun[] }>(`/tasks?limit=${limit}`);
 }
@@ -319,6 +368,10 @@ export async function getTask(runId: number) {
 
 export async function checkJiraConnection() {
   return apiFetch<JiraConnectionStatus>("/integrations/jira/health");
+}
+
+export async function checkConfluenceConnection() {
+  return apiFetch<ConfluenceConnectionStatus>("/integrations/confluence/health");
 }
 
 export async function getManagementSummary(taskId: number) {
