@@ -29,6 +29,38 @@ from app.reporting import build_daily_report, render_markdown, write_report_file
 TASK_POLL_INTERVAL_SECONDS = 1.0
 TASK_MAX_ATTEMPTS = 3
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+_RUN_CANCEL_EVENTS: dict[int, threading.Event] = {}
+_RUN_CANCEL_LOCK = threading.Lock()
+
+
+class TaskCancelledError(RuntimeError):
+    pass
+
+
+def _register_run_cancel_event(run_id: int) -> threading.Event:
+    event = threading.Event()
+    with _RUN_CANCEL_LOCK:
+        _RUN_CANCEL_EVENTS[run_id] = event
+    return event
+
+
+def _unregister_run_cancel_event(run_id: int) -> None:
+    with _RUN_CANCEL_LOCK:
+        _RUN_CANCEL_EVENTS.pop(run_id, None)
+
+
+def _signal_run_cancel(run_id: int) -> bool:
+    with _RUN_CANCEL_LOCK:
+        event = _RUN_CANCEL_EVENTS.get(run_id)
+    if not event:
+        return False
+    event.set()
+    return True
+
+
+def _raise_if_cancelled(cancel_event: threading.Event | None, run_id: int) -> None:
+    if cancel_event and cancel_event.is_set():
+        raise TaskCancelledError(f"Task #{run_id} was cancelled")
 
 
 @asynccontextmanager
@@ -48,6 +80,7 @@ _app_config, _ = _bootstrap(None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_app_config.server.cors_allow_origins,
+    allow_origin_regex=_app_config.server.cors_allow_origin_regex,
     allow_credentials=_app_config.server.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -122,7 +155,12 @@ class UploadDocsResponse(BaseModel):
     message: str
 
 
-def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) -> None:
+def _run_management_summary(
+    run_id: int,
+    request: ManagementSummaryTaskRequest,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     summary_request = ManagementSummaryRequest(
         date_from=request.date_from,
@@ -131,19 +169,22 @@ def _run_management_summary(run_id: int, request: ManagementSummaryTaskRequest) 
         jira_status=request.jira_status,
     )
     result = build_management_summary(config, repo, summary_request, run_id=run_id)
+    _raise_if_cancelled(cancel_event, run_id)
     repo.save_management_summary(run_id, summary_request, result)
     paths = write_management_summary_files(config, result)
     repo.update_run(run_id, "success", str(paths))
 
 
-def _run_incremental_sync(run_id: int, request: SyncTaskRequest) -> None:
+def _run_incremental_sync(run_id: int, request: SyncTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     snapshot_date = request.snapshot_date or date.today().isoformat()
-    _crawl_snapshot(config, repo, snapshot_date)
+    _crawl_snapshot(config, repo, snapshot_date, cancel_event=cancel_event, run_id=run_id)
     repo.update_run(run_id, "success", f"Synced snapshot for {snapshot_date}")
 
 
-def _run_full_sync(run_id: int, request: SyncTaskRequest) -> None:
+def _run_full_sync(run_id: int, request: SyncTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     from app.crawler import JiraCrawler, derive_issue_deltas, iter_snapshot_dates, reconstruct_snapshot_issues
 
@@ -155,6 +196,7 @@ def _run_full_sync(run_id: int, request: SyncTaskRequest) -> None:
     previous_date = repo.get_previous_snapshot_date(resolved_from)
     previous_snapshot: list = repo.load_snapshot(previous_date) if previous_date else []
     for current_date in snapshot_dates:
+        _raise_if_cancelled(cancel_event, run_id)
         snapshot_issues = reconstruct_snapshot_issues(result.issues, result.change_events, current_date)
         deltas = derive_issue_deltas(snapshot_issues, previous_snapshot)
         repo.save_daily_snapshot(current_date, snapshot_issues)
@@ -163,10 +205,20 @@ def _run_full_sync(run_id: int, request: SyncTaskRequest) -> None:
     repo.update_run(run_id, "success", f"Backfilled snapshots for {resolved_from}..{resolved_to}")
 
 
-def _crawl_snapshot(config, repo, snapshot_date: str) -> None:
+def _crawl_snapshot(
+    config,
+    repo,
+    snapshot_date: str,
+    cancel_event: threading.Event | None = None,
+    run_id: int | None = None,
+) -> None:
+    if run_id is not None:
+        _raise_if_cancelled(cancel_event, run_id)
     from app.crawler import JiraCrawler, derive_issue_deltas
 
     result = JiraCrawler(config.jira).crawl(snapshot_date)
+    if run_id is not None:
+        _raise_if_cancelled(cancel_event, run_id)
     previous_date = repo.get_previous_snapshot_date(result.snapshot_date)
     previous = repo.load_snapshot(previous_date) if previous_date else []
     deltas = derive_issue_deltas(result.issues, previous)
@@ -175,16 +227,18 @@ def _crawl_snapshot(config, repo, snapshot_date: str) -> None:
     repo.save_deltas(result.snapshot_date, deltas)
 
 
-def _run_crawl(run_id: int, request: SimpleTaskRequest) -> None:
-    _run_incremental_sync(run_id, SyncTaskRequest(config_path=request.config_path))
+def _run_crawl(run_id: int, request: SimpleTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _run_incremental_sync(run_id, SyncTaskRequest(config_path=request.config_path), cancel_event=cancel_event)
 
 
-def _run_build_docs(run_id: int, request: SimpleTaskRequest) -> None:
+def _run_build_docs(run_id: int, request: SimpleTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     converter = DocumentConverter(config.docs)
     confluence_documents = []
     if config.confluence.base_url and config.confluence.space_keys:
         confluence_documents = ConfluenceCrawler(config.confluence, config.docs).crawl_documents()
+    _raise_if_cancelled(cancel_event, run_id)
     _, product_chunks = converter.build_documents()
     confluence_chunks = converter.build_chunks_from_documents(confluence_documents)
     jira_chunks = build_jira_chunks(repo, config.docs)
@@ -201,13 +255,16 @@ def _run_build_docs(run_id: int, request: SimpleTaskRequest) -> None:
     )
 
 
-def _run_confluence_sync(run_id: int, request: SimpleTaskRequest) -> None:
+def _run_confluence_sync(run_id: int, request: SimpleTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     documents = ConfluenceCrawler(config.confluence, config.docs).crawl_documents()
+    _raise_if_cancelled(cancel_event, run_id)
     repo.update_run(run_id, "success", f"Fetched {len(documents)} Confluence pages")
 
 
-def _run_analyze(run_id: int, request: DailyTaskRequest) -> None:
+def _run_analyze(run_id: int, request: DailyTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     report_date = request.report_date or date.today().isoformat()
     issues = repo.load_snapshot(report_date)
@@ -220,13 +277,16 @@ def _run_analyze(run_id: int, request: DailyTaskRequest) -> None:
     stale_keys = {key for key in stale_keys if key in issue_keys}
     report_obj = build_daily_report(report_date, issues, deltas, stale_keys, config, run_id=run_id)
     chunks = filter_product_doc_chunks(repo.load_doc_chunks())
+    _raise_if_cancelled(cancel_event, run_id)
     daily_analysis, issue_analyses = analyze_daily_report(config, report_obj, build_retriever(config, chunks), issues)
+    _raise_if_cancelled(cancel_event, run_id)
     repo.save_daily_analysis(daily_analysis)
     repo.save_issue_analyses(issue_analyses)
     repo.update_run(run_id, "success", f"Analyzed {len(issue_analyses)} priority issues for {report_date}")
 
 
-def _run_daily_report(run_id: int, request: DailyTaskRequest) -> None:
+def _run_daily_report(run_id: int, request: DailyTaskRequest, cancel_event: threading.Event | None = None) -> None:
+    _raise_if_cancelled(cancel_event, run_id)
     config, repo = _bootstrap(request.config_path)
     report_date = request.report_date or date.today().isoformat()
     issues = repo.load_snapshot(report_date)
@@ -244,6 +304,7 @@ def _run_daily_report(run_id: int, request: DailyTaskRequest) -> None:
         for item in repo.load_issue_analyses(report_date)
         if item.issue_key in issue_keys
     }
+    _raise_if_cancelled(cancel_event, run_id)
     markdown_text = render_markdown(daily_report, daily_analysis, issue_analyses)
     paths = write_report_files(config, daily_report, markdown_text, daily_analysis, issue_analyses)
     repo.update_run(run_id, "success", json.dumps(paths, ensure_ascii=False))
@@ -282,13 +343,19 @@ def _execute_queued_run(run_id: int, run_type: str, payload_json: str | None, re
         repo.update_run(run_id, "failed", f"Unknown task type: {run_type}")
         return
     model_cls, handler = model_and_handler
+    cancel_event = _register_run_cancel_event(run_id)
     try:
         payload = model_cls.model_validate(json.loads(payload_json) if payload_json else {})
-        handler(run_id, payload)
+        _raise_if_cancelled(cancel_event, run_id)
+        handler(run_id, payload, cancel_event)
     except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
         repo.update_run(run_id, "failed", f"Invalid task payload: {exc}")
+    except TaskCancelledError as exc:
+        repo.update_run(run_id, "cancelled", str(exc))
     except Exception as exc:
         repo.schedule_retry(run_id, str(exc), TASK_MAX_ATTEMPTS)
+    finally:
+        _unregister_run_cancel_event(run_id)
 
 
 @app.get("/health")
@@ -472,6 +539,24 @@ def get_task(run_id: int, config_path: str | None = None) -> dict:
     if not row:
         raise HTTPException(status_code=404, detail="run not found")
     return _serialize_run(row)
+
+
+@app.post("/tasks/{run_id}/cancel")
+def cancel_task(run_id: int, config_path: str | None = None) -> dict[str, int | str]:
+    _, repo = _bootstrap(config_path)
+    state = repo.cancel_run(run_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if state == "cancelling":
+        _signal_run_cancel(run_id)
+        row = repo.load_run(run_id)
+        return {"id": run_id, "status": str(row["status"]) if row else "running", "message": "Cancellation requested"}
+    row = repo.load_run(run_id)
+    return {
+        "id": run_id,
+        "status": str(row["status"]) if row else state,
+        "message": "Task cancelled" if state == "cancelled" else f"Task already {state}",
+    }
 
 
 @app.get("/reports/management-summary/{run_id}")
@@ -715,6 +800,7 @@ def _serialize_run(row: dict) -> dict:
         "run_type": row["run_type"],
         "run_date": row["run_date"],
         "status": row["status"],
+        "can_cancel": row["status"] in {"queued", "running"},
         "details": details,
         "details_json": parsed_details,
         "attempt_count": row.get("attempt_count", 0),

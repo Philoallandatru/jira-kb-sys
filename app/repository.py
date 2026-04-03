@@ -256,6 +256,38 @@ class Repository:
             conn.commit()
             return int(cursor.rowcount)
 
+    def cancel_run(self, run_id: int) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if not row:
+                return None
+            status = str(row["status"])
+            if status == "queued":
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'cancelled',
+                        details = ?,
+                        finished_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status = 'queued'
+                    """,
+                    ("Cancelled before execution", run_id),
+                )
+                conn.commit()
+                return "cancelled"
+            if status == "running":
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET details = ?
+                    WHERE id = ?
+                    """,
+                    ("Cancellation requested", run_id),
+                )
+                conn.commit()
+                return "cancelling"
+            return status
+
     def schedule_retry(self, run_id: int, error: str, max_attempts: int) -> bool:
         with self.connect() as conn:
             row = conn.execute("SELECT attempt_count FROM runs WHERE id = ?", (run_id,)).fetchone()

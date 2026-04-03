@@ -8,8 +8,10 @@ type TaskRunsPanelProps = {
   selectedRun: TaskRun | null;
   loadingRuns: boolean;
   error: string | null;
+  cancellingRunId: number | null;
   onRefresh: () => void;
   onSelectRun: (id: number) => void;
+  onCancelRun: (id: number) => void;
 };
 
 export function TaskRunsPanel({
@@ -18,8 +20,10 @@ export function TaskRunsPanel({
   selectedRun,
   loadingRuns,
   error,
+  cancellingRunId,
   onRefresh,
   onSelectRun,
+  onCancelRun,
 }: TaskRunsPanelProps) {
   return (
     <>
@@ -64,6 +68,16 @@ export function TaskRunsPanel({
                   <p>开始时间：{selectedRun.started_at || "-"}</p>
                   <p>结束时间：{selectedRun.finished_at || "-"}</p>
                   <p>最近错误：{selectedRun.last_error || "-"}</p>
+                  {selectedRun.can_cancel && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => onCancelRun(selectedRun.id)}
+                      disabled={cancellingRunId === selectedRun.id}
+                    >
+                      {cancellingRunId === selectedRun.id ? "正在停止..." : "停止任务"}
+                    </button>
+                  )}
                 </div>
                 <div className="summary-section">
                   <h3>任务详情</h3>

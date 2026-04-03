@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
+  cancelTask,
   checkConfluenceConnection,
   checkJiraConnection,
   createAnalyzeTask,
@@ -37,6 +38,7 @@ export function TaskCenterClient() {
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [selectedRun, setSelectedRun] = useState<TaskRun | null>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
+  const [cancellingRunId, setCancellingRunId] = useState<number | null>(null);
   const [actionState, setActionState] = useState("就绪");
   const [jiraState, setJiraState] = useState("未检查");
   const [confluenceState, setConfluenceState] = useState("未检查");
@@ -111,6 +113,24 @@ export function TaskCenterClient() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : `提交 ${taskName} 失败`);
       setActionState(`${taskName} 提交失败`);
+    }
+  }
+
+  async function handleCancelRun(runId: number) {
+    setError(null);
+    setCancellingRunId(runId);
+    setActionState(`正在停止任务 #${runId}...`);
+    try {
+      const result = await cancelTask(runId);
+      setActionState(`任务 #${runId} ${result.message}`);
+      await refreshRuns(runId);
+      const latest = await getTask(runId);
+      setSelectedRun(latest);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : `停止任务 #${runId} 失败`);
+      setActionState(`停止任务 #${runId} 失败`);
+    } finally {
+      setCancellingRunId(null);
     }
   }
 
@@ -242,8 +262,10 @@ export function TaskCenterClient() {
           selectedRun={selectedRun}
           loadingRuns={loadingRuns}
           error={error}
+          cancellingRunId={cancellingRunId}
           onRefresh={() => refreshRuns()}
           onSelectRun={setSelectedRunId}
+          onCancelRun={handleCancelRun}
         />
       </section>
     </div>

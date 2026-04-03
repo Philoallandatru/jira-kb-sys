@@ -107,7 +107,7 @@ server:
   port: 8000
   cors_allow_origins:
     - "http://127.0.0.1:3000"
-    - "http://192.168.1.10:3000"
+  cors_allow_origin_regex: "^https?://(localhost|127\\.0\\.0\\.1|10\\.\\d+\\.\\d+\\.\\d+|192\\.168\\.\\d+\\.\\d+|172\\.(1[6-9]|2\\d|3[0-1])\\.\\d+\\.\\d+)(:\\d+)?$"
 
 retrieval:
   backend: "tantivy"
@@ -135,7 +135,9 @@ Notes:
 - Confluence pages are normalized into markdown-ish text before indexing, preserving headings, list items, tables, code blocks, warning/info panels, and short comment summaries.
 - `IssueRecord.team` now defaults to the Jira `Report department` raw value.
 - The API binds to `0.0.0.0` by default so other machines on the same LAN can reach it.
-- If the frontend runs on another machine, set `NEXT_PUBLIC_API_BASE_URL` to the host machine LAN IP instead of `127.0.0.1`.
+- The frontend now defaults to a same-origin Next.js proxy at `/api/proxy`, so LAN users do not need to manually replace the backend IP when the frontend and backend run on the same host.
+- If FastAPI is not running on the same host as the Next.js frontend server, set `JIRA_SUMMARY_BACKEND_URL` for the frontend process.
+- Direct browser access to FastAPI from private-network origins is allowed by default through `server.cors_allow_origin_regex`; manual IP allowlisting is only needed if your network does not match the default private IPv4 ranges or if you want stricter origin control.
 
 ## Retrieval Architecture
 
@@ -218,7 +220,6 @@ python -m app.cli report --date 2026-04-03
 python -m app.cli management-summary --date-from 2026-04-02 --date-to 2026-04-03
 python -m app.api
 cd frontend
-$env:NEXT_PUBLIC_API_BASE_URL='http://127.0.0.1:8000'
 npm run dev
 ```
 
@@ -232,7 +233,6 @@ python -m app.cli report --date 2026-04-03
 python -m app.cli management-summary --date-from 2026-04-02 --date-to 2026-04-03
 python -m app.api
 cd frontend
-export NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 

@@ -1,5 +1,5 @@
 ﻿export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ?? "/api/proxy";
 
 export type ManagementSummaryRequest = {
   date_from: string;
@@ -20,6 +20,7 @@ export type TaskRun = {
   run_type: string;
   run_date: string;
   status: string;
+  can_cancel: boolean;
   details: string | null;
   details_json: unknown;
   attempt_count: number;
@@ -364,6 +365,12 @@ export async function listTasks(limit = 50) {
 
 export async function getTask(runId: number) {
   return apiFetch<TaskRun>(`/tasks/${runId}`);
+}
+
+export async function cancelTask(runId: number) {
+  return apiFetch<{ id: number; status: string; message: string }>(`/tasks/${runId}/cancel`, {
+    method: "POST",
+  });
 }
 
 export async function checkJiraConnection() {

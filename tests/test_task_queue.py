@@ -57,3 +57,29 @@ def test_repository_retries_before_marking_failed(tmp_path):
     assert failed["status"] == "failed"
     assert failed["attempt_count"] == 2
     assert failed["last_error"] == "still failing"
+
+
+def test_repository_cancels_queued_run(tmp_path):
+    repo = Repository(str(tmp_path / "test.db"))
+    run_id = repo.create_run("report", "2026-04-01", "queued", payload={"report_date": "2026-04-01"})
+
+    state = repo.cancel_run(run_id)
+    run = repo.load_run(run_id)
+
+    assert state == "cancelled"
+    assert run is not None
+    assert run["status"] == "cancelled"
+    assert run["details"] == "Cancelled before execution"
+
+
+def test_repository_marks_running_run_as_cancelling(tmp_path):
+    repo = Repository(str(tmp_path / "test.db"))
+    run_id = repo.create_run("build-docs", "2026-04-01", "running")
+
+    state = repo.cancel_run(run_id)
+    run = repo.load_run(run_id)
+
+    assert state == "cancelling"
+    assert run is not None
+    assert run["status"] == "running"
+    assert run["details"] == "Cancellation requested"

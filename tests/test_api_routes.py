@@ -14,12 +14,69 @@ def test_api_exposes_sync_and_jira_health_routes():
     assert ("/tasks/sync/confluence", ("POST",)) in routes
     assert ("/tasks/sync/full", ("POST",)) in routes
     assert ("/tasks/sync/incremental", ("POST",)) in routes
+    assert ("/tasks/{run_id}/cancel", ("POST",)) in routes
     assert ("/integrations/confluence/health", ("GET",)) in routes
     assert ("/integrations/jira/health", ("GET",)) in routes
 
 
 def test_api_enables_cors_middleware():
     assert any(middleware.cls is CORSMiddleware for middleware in api.app.user_middleware)
+
+
+def test_cancel_task_returns_404_when_run_missing(monkeypatch):
+    fake_repo = SimpleNamespace(cancel_run=lambda run_id: None)
+    monkeypatch.setattr(api, "_bootstrap", lambda config_path=None: (None, fake_repo))
+
+    with pytest.raises(HTTPException) as exc_info:
+        api.cancel_task(42)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_cancel_task_marks_queued_run_cancelled(monkeypatch):
+    fake_repo = SimpleNamespace(
+        cancel_run=lambda run_id: "cancelled",
+        load_run=lambda run_id: {"id": run_id, "status": "cancelled"},
+    )
+    monkeypatch.setattr(api, "_bootstrap", lambda config_path=None: (None, fake_repo))
+
+    result = api.cancel_task(7)
+
+    assert result == {"id": 7, "status": "cancelled", "message": "Task cancelled"}
+
+
+def test_cancel_task_signals_running_run(monkeypatch):
+    fake_repo = SimpleNamespace(
+        cancel_run=lambda run_id: "cancelling",
+        load_run=lambda run_id: {"id": run_id, "status": "running"},
+    )
+    signalled: list[int] = []
+    monkeypatch.setattr(api, "_bootstrap", lambda config_path=None: (None, fake_repo))
+    monkeypatch.setattr(api, "_signal_run_cancel", lambda run_id: signalled.append(run_id) or True)
+
+    result = api.cancel_task(9)
+
+    assert signalled == [9]
+    assert result == {"id": 9, "status": "running", "message": "Cancellation requested"}
+
+
+def test_serialize_run_exposes_cancel_flag():
+    run = api._serialize_run(
+        {
+            "id": 3,
+            "run_type": "report",
+            "run_date": "2026-04-03",
+            "status": "running",
+            "details": "",
+            "attempt_count": 1,
+            "last_error": None,
+            "created_at": "2026-04-03T00:00:00",
+            "started_at": "2026-04-03T00:00:01",
+            "finished_at": None,
+        }
+    )
+
+    assert run["can_cancel"] is True
 
 
 def test_get_jira_connection_health_success(monkeypatch):

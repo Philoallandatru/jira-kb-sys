@@ -129,6 +129,14 @@ class ServerConfig(BaseModel):
             "http://127.0.0.1:3000",
         ]
     )
+    cors_allow_origin_regex: str | None = (
+        r"^https?://("
+        r"localhost|127\.0\.0\.1|"
+        r"10\.\d+\.\d+\.\d+|"
+        r"192\.168\.\d+\.\d+|"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+"
+        r")(:\d+)?$"
+    )
     cors_allow_credentials: bool = True
 
 
