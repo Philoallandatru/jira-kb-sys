@@ -1,4 +1,4 @@
-from app.issue_details import _fallback_issue_deep_analysis
+﻿from app.issue_details import _fallback_issue_deep_analysis
 from app.models import DocChunk, IssueAIAnalysis, IssueRecord
 from app.docs import SearchHit
 
@@ -62,3 +62,22 @@ def test_fallback_issue_deep_analysis_groups_spec_and_policy_hits():
     assert result.open_questions
     assert result.citations
     assert len(result.open_questions) >= 1
+
+
+def test_fallback_issue_deep_analysis_exposes_comment_insights():
+    issue = IssueRecord(
+        issue_key="SSD-301",
+        summary="Controller hang during smoke test",
+        status="Blocked",
+        team="FW",
+        comments=[
+            "风险：当前版本在回归阶段仍会 timeout，先不要关闭。",
+            "行动：Owner 今天补日志，明天给结论。",
+        ],
+    )
+
+    result = _fallback_issue_deep_analysis(issue, [], [], None)
+
+    assert result.comment_summary.startswith("共整理")
+    assert any("风险" in item or "timeout" in item for item in result.comment_risks_blockers)
+    assert any("行动" in item or "结论" in item for item in result.comment_actions_decisions)
